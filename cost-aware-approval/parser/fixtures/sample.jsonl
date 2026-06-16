@@ -1,0 +1,4 @@
+{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
+{"type":"user","message":{"role":"user"}}
+{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":200,"output_tokens":80,"cache_creation_input_tokens":500,"cache_read_input_tokens":300}}}
+{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":150,"output_tokens":60,"cache_creation_input_tokens":0,"cache_read_input_tokens":400}}}

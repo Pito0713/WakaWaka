@@ -1,0 +1,13 @@
+# Swift build artifacts
+cost-aware-approval/app/CostNotch/.build/
+cost-aware-approval/app/CostNotch/*.xcworkspace
+cost-aware-approval/app/CostNotch/.swiftpm/
+
+# Runtime state (never commit)
+cost-aware-approval/state/
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/

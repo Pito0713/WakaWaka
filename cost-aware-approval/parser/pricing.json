@@ -1,0 +1,9 @@
+{
+  "_date": "2026-06-13",
+  "_note": "手動維護，需定期更新。來源：cloudzero.com/blog/claude-pricing + apidog.com/blog/claude-3-5-sonnet-pricing，Gemini 交叉搜尋確認於 2026-06-13。",
+  "model": "claude-sonnet-4-6",
+  "inputPerMTok": 3.0,
+  "outputPerMTok": 15.0,
+  "cacheReadPerMTok": 0.3,
+  "cacheCreationPerMTok": 3.75
+}
