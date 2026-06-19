@@ -237,17 +237,17 @@ private struct QueueItemRow: View {
                     .id(now)
             }
 
-            // Full detail scroll area
-            if !item.toolInputDetail.isEmpty {
+            // Full detail scroll area (colored diff blocks)
+            if !item.toolInputSections.isEmpty {
                 ScrollView(.vertical) {
-                    Text(item.toolInputDetail)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.primary.opacity(0.85))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                        .padding(8)
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(item.toolInputSections) { section in
+                            diffSectionView(section)
+                        }
+                    }
+                    .padding(4)
                 }
-                .frame(maxHeight: 200)
+                .frame(maxHeight: 220)
                 .background(Color(NSColor.textBackgroundColor).opacity(0.6))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6)
@@ -304,6 +304,46 @@ private struct QueueItemRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.bottom, 12)
+    }
+
+    // MARK: - Diff section rendering
+
+    @ViewBuilder
+    private func diffSectionView(_ section: DiffSection) -> some View {
+        switch section.kind {
+        case .header:
+            Text(section.text)
+                .font(.system(.caption2, design: .monospaced).weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 6)
+                .padding(.top, 4)
+        case .removed:
+            Text(section.text)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(Color.red.opacity(0.85))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .padding(.horizontal, 6).padding(.vertical, 4)
+                .background(Color.red.opacity(0.07))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+        case .added:
+            Text(section.text)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(Color.green.opacity(0.85))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .padding(.horizontal, 6).padding(.vertical, 4)
+                .background(Color.green.opacity(0.07))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+        case .plain:
+            Text(section.text)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.primary.opacity(0.85))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .padding(.horizontal, 6).padding(.vertical, 4)
+        }
     }
 
     // MARK: - Usage block (redesigned)

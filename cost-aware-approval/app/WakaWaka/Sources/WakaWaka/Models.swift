@@ -45,6 +45,15 @@ private indirect enum JSONValue: Decodable {
     }
 }
 
+// MARK: - Diff sections (colored blocks in detail view)
+
+struct DiffSection: Identifiable {
+    enum Kind { case header, removed, added, plain }
+    let id   = UUID()
+    let kind: Kind
+    let text: String
+}
+
 // MARK: - pending_<session_id>.json
 
 enum RiskLevel: String, Decodable {
@@ -60,8 +69,8 @@ struct PendingData: Decodable {
 
     /// 單行標題：顯示在 tool 名稱旁（路徑或指令前幾字）
     let toolInputSummary: String
-    /// 完整內容：顯示在可捲動區塊，讓使用者看到實際操作
-    let toolInputDetail: String
+    /// 完整內容：帶顏色色塊的結構化區塊（removed=紅, added=綠）
+    let toolInputSections: [DiffSection]
 
     /// Set to true when the hook process exited before the user made a decision
     /// (timeout or Claude Code killed the hook). WakaWaka shows "已逾時" state.
@@ -93,8 +102,8 @@ struct PendingData: Decodable {
         hookUrgent      = try c.decodeIfPresent(Bool.self,       forKey: .hookUrgent)
 
         let raw = try? c.decode([String: JSONValue].self, forKey: .tool_input)
-        toolInputSummary = Self.buildSummary(toolName: tool_name, raw: raw)
-        toolInputDetail  = Self.buildDetail(toolName: tool_name, raw: raw)
+        toolInputSummary  = Self.buildSummary(toolName: tool_name, raw: raw)
+        toolInputSections = Self.buildSections(toolName: tool_name, raw: raw)
     }
 
     // MARK: - Summary（單行標題）
@@ -124,10 +133,10 @@ struct PendingData: Decodable {
         }
     }
 
-    // MARK: - Detail（完整內容，放進可捲動區塊）
+    // MARK: - Sections（帶顏色的結構化內容區塊）
 
-    private static func buildDetail(toolName: String?, raw: [String: JSONValue]?) -> String {
-        guard let raw, !raw.isEmpty else { return "" }
+    private static func buildSections(toolName: String?, raw: [String: JSONValue]?) -> [DiffSection] {
+        guard let raw, !raw.isEmpty else { return [] }
 
         switch toolName {
 
@@ -136,78 +145,74 @@ struct PendingData: Decodable {
             let old     = raw["old_string"]?.str ?? ""
             let new     = raw["new_string"]?.str ?? ""
             let replace = raw["replace_all"]?.displayString
-            var lines   = ["📄 \(file)"]
-            if let r = replace, r == "true" { lines.append("（replace_all: true）") }
-            if !old.isEmpty {
-                lines.append("\n── 修改前 ─────────────────────")
-                lines.append(cap(old, 800))
+            var sections: [DiffSection] = [.init(kind: .header, text: "📄 \(file)")]
+            if let r = replace, r == "true" {
+                sections.append(.init(kind: .header, text: "replace_all: true"))
             }
-            if !new.isEmpty {
-                lines.append("\n── 修改後 ─────────────────────")
-                lines.append(cap(new, 800))
-            }
-            return lines.joined(separator: "\n")
+            if !old.isEmpty { sections.append(.init(kind: .removed, text: cap(old, 800))) }
+            if !new.isEmpty { sections.append(.init(kind: .added,   text: cap(new, 800))) }
+            return sections
 
         case "MultiEdit":
-            let file  = raw["file_path"]?.str ?? "?"
-            var lines = ["📄 \(file)"]
+            let file = raw["file_path"]?.str ?? "?"
+            var sections: [DiffSection] = [.init(kind: .header, text: "📄 \(file)")]
             if case .array(let edits) = raw["edits"] {
                 for (i, edit) in edits.enumerated() {
                     if case .object(let e) = edit {
-                        lines.append("\n── 修改 \(i + 1) ─────────────────────")
-                        if let o = e["old_string"]?.str { lines.append("前：\(cap(o, 300))") }
-                        if let n = e["new_string"]?.str { lines.append("後：\(cap(n, 300))") }
+                        sections.append(.init(kind: .header, text: "── 修改 \(i + 1) ──"))
+                        if let o = e["old_string"]?.str { sections.append(.init(kind: .removed, text: cap(o, 300))) }
+                        if let n = e["new_string"]?.str { sections.append(.init(kind: .added,   text: cap(n, 300))) }
                     }
                 }
             }
-            return lines.joined(separator: "\n")
+            return sections
 
         case "Write":
             let file    = raw["file_path"]?.str ?? "?"
             let content = raw["content"]?.str ?? ""
-            var lines   = ["📄 \(file)", ""]
-            lines.append(content.isEmpty ? "(empty file)" : cap(content, 1000))
-            return lines.joined(separator: "\n")
+            return [
+                .init(kind: .header, text: "📄 \(file)"),
+                .init(kind: .plain,  text: content.isEmpty ? "(empty file)" : cap(content, 1000)),
+            ]
 
         case "Bash":
-            return raw["command"]?.str ?? "(no command)"
+            return [.init(kind: .plain, text: raw["command"]?.str ?? "(no command)")]
 
         case "WebFetch":
             let url    = raw["url"]?.str ?? "?"
             let method = raw["method"]?.str ?? "GET"
-            var lines  = ["\(method)  \(url)"]
+            var sections: [DiffSection] = [.init(kind: .header, text: "\(method)  \(url)")]
             if let body = raw["body"]?.str, !body.isEmpty {
-                lines.append("\n── Body ────────────────────────")
-                lines.append(cap(body, 500))
+                sections.append(.init(kind: .plain, text: cap(body, 500)))
             }
-            return lines.joined(separator: "\n")
+            return sections
 
         case "WebSearch":
             let query = raw["query"]?.str ?? "?"
-            let limit = raw["max_results"]?.displayString
-            var lines = ["query: \(query)"]
-            if let l = limit { lines.append("max_results: \(l)") }
-            return lines.joined(separator: "\n")
+            var sections: [DiffSection] = [.init(kind: .plain, text: "query: \(query)")]
+            if let l = raw["max_results"]?.displayString {
+                sections.append(.init(kind: .plain, text: "max_results: \(l)"))
+            }
+            return sections
 
         case "Read":
-            var lines = ["📄 \(raw["file_path"]?.str ?? "?")"]
-            if let offset = raw["offset"]?.displayString { lines.append("offset: \(offset)") }
-            if let limit  = raw["limit"]?.displayString  { lines.append("limit: \(limit)") }
-            return lines.joined(separator: "\n")
+            var sections: [DiffSection] = [.init(kind: .header, text: "📄 \(raw["file_path"]?.str ?? "?")")]
+            if let offset = raw["offset"]?.displayString { sections.append(.init(kind: .plain, text: "offset: \(offset)")) }
+            if let limit  = raw["limit"]?.displayString  { sections.append(.init(kind: .plain, text: "limit: \(limit)")) }
+            return sections
 
         case "NotebookEdit":
             let file = raw["notebook_path"]?.str ?? "?"
-            let op   = raw["new_source"]?.str.map { "new_source:\n\(cap($0, 400))" }
-                    ?? raw["cell_type"]?.str.map  { "cell_type: \($0)" }
-                    ?? ""
-            return ["📄 \(file)", op].filter { !$0.isEmpty }.joined(separator: "\n")
+            var sections: [DiffSection] = [.init(kind: .header, text: "📄 \(file)")]
+            let op = raw["new_source"]?.str.map { cap($0, 400) } ?? raw["cell_type"]?.str
+            if let op { sections.append(.init(kind: .plain, text: op)) }
+            return sections
 
         default:
-            // Generic: show all fields, strings in full, others with type hint
             return raw.sorted { $0.key < $1.key }.map { k, v in
                 let val = v.str.map { cap($0, 300) } ?? "[\(v.displayString)]"
-                return "[\(k)]\n\(val)"
-            }.joined(separator: "\n\n")
+                return DiffSection(kind: .plain, text: "[\(k)]\n\(val)")
+            }
         }
     }
 

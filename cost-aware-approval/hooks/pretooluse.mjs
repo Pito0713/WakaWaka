@@ -44,8 +44,6 @@ const FINAL_TIMEOUT_MS   = parseInt(process.env.FINAL_TIMEOUT_MS   ?? '590000', 
 const AUTO_ALLOW_TOOLS = new Set([
   // File system reads
   'Read', 'Glob', 'Grep', 'LS',
-  // File system writes / edits (safe — user sees diffs in Claude Code UI)
-  'Edit', 'MultiEdit', 'Write',
   // In-memory todo list (no disk/network side effects)
   'TodoRead', 'TodoWrite',
   // Read-only web operations
@@ -53,6 +51,9 @@ const AUTO_ALLOW_TOOLS = new Set([
   // Notebook reads / edits
   'NotebookRead', 'NotebookEdit',
 ]);
+
+// Edit / MultiEdit / Write intentionally excluded — routed through WakaWaka
+// so the user can review file changes before they are applied.
 
 // ── Category 2: Safe bash command prefixes ────────────────────────────────────
 // When a Bash command is MEDIUM risk (not CRITICAL/HIGH), and its first token
