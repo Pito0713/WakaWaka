@@ -15,7 +15,7 @@ cost-aware-approval/
 │   ├── usage-calculator.ts   # Task 2：token 用量計算
 │   └── pricing.json          # 價格表（手動維護，標注日期）
 ├── app/
-│   └── CostNotch/             # Task 3：SwiftUI MenuBarExtra app
+│   └── WakaWaka/             # Task 3：SwiftUI MenuBarExtra app
 ├── state/
 │   └── (執行時產生，不進 git)
 │       ├── pending.json       # hook 寫入，等待審核
@@ -27,23 +27,23 @@ cost-aware-approval/
 - Hook script：Node.js（`.mjs`），跨平台路徑用 `os.homedir()`、`os.tmpdir()`，避免 shell-specific 指令
 - Parser：TypeScript，編譯成 Node 可執行（與 hook 共用 Node runtime）
 - UI：Swift + SwiftUI `MenuBarExtra`，macOS 14+
-- 通訊機制：檔案輪詢（不做 socket），路徑統一放在 `~/.costnotch/state/`
+- 通訊機制：檔案輪詢（不做 socket），路徑統一放在 `~/.wakawaka/state/`
 
 ---
 
 ## Task 1：PreToolUse Hook Script
 
 ### 目標
-Claude Code 觸發 PreToolUse 時，把當前 session 資訊寫入 `~/.costnotch/state/pending.json`，然後等待 `decision.json` 出現，依內容 exit 0（允許）或 exit 2（拒絕）。
+Claude Code 觸發 PreToolUse 時，把當前 session 資訊寫入 `~/.wakawaka/state/pending.json`，然後等待 `decision.json` 出現，依內容 exit 0（允許）或 exit 2（拒絕）。
 
 ### 給 Claude Code 的任務描述
 ```
 請在 hooks/pretooluse.mjs 實作一個 Claude Code PreToolUse hook：
 
 1. 從 stdin 讀取 JSON（包含 session_id, transcript_path, tool_name, tool_input 等欄位）
-2. 將以下內容寫入 ~/.costnotch/state/pending.json：
+2. 將以下內容寫入 ~/.wakawaka/state/pending.json：
    { "session_id": ..., "tool_name": ..., "tool_input": ..., "transcript_path": ..., "timestamp": <now> }
-3. 輪詢（每 200ms，最多等待 30 秒）~/.costnotch/state/decision.json 是否出現
+3. 輪詢（每 200ms，最多等待 30 秒）~/.wakawaka/state/decision.json 是否出現
 4. 若 decision.json 內容為 { "decision": "allow" }：刪除該檔案，exit 0
 5. 若為 { "decision": "deny", "reason": "..." }：將 reason 寫入 stderr，刪除該檔案，exit 2
 6. 若 30 秒內未出現 decision.json（app 未運行的 fallback）：直接 exit 1（中性結果，
@@ -117,9 +117,9 @@ Claude Code 觸發 PreToolUse 時，把當前 session 資訊寫入 `~/.costnotch
 
 ### 給 Claude Code 的任務描述
 ```
-請建立一個 SwiftUI macOS app（MenuBarExtra），位於 app/CostNotch/：
+請建立一個 SwiftUI macOS app（MenuBarExtra），位於 app/WakaWaka/：
 
-1. 每 1 秒輪詢 ~/.costnotch/state/pending.json
+1. 每 1 秒輪詢 ~/.wakawaka/state/pending.json
 2. 若檔案存在：
    - 呼叫 Task 2 的 parser（用 Process 執行 node parser/usage-calculator.ts
      <transcript_path>，解析 stdout 的 JSON）
@@ -148,7 +148,7 @@ Claude Code 觸發 PreToolUse 時，把當前 session 資訊寫入 `~/.costnotch
 ```
 請寫一個整合測試腳本 test/integration.sh：
 
-1. 啟動 CostNotch app（背景執行）
+1. 啟動 WakaWaka app（背景執行）
 2. 模擬呼叫 hooks/pretooluse.mjs（用真實或 fixture 的 session 資料）
 3. 確認 pending.json 正確產生
 4. 手動或腳本模擬點擊 Allow，確認 hook process 在 2 秒內 exit 0

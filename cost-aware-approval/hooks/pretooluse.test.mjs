@@ -5,25 +5,26 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'node:child_process';
 
-const STATE_DIR = path.join(os.homedir(), '.costnotch', 'state');
-const PENDING_PATH = path.join(STATE_DIR, 'pending.json');
-const DECISION_PATH = path.join(STATE_DIR, 'decision.json');
+const STATE_DIR = path.join(os.homedir(), '.wakawaka', 'state');
 const HOOK = new URL('./pretooluse.mjs', import.meta.url).pathname;
 
-const FIXTURE = JSON.stringify({
-  session_id: 'test-session',
-  tool_name: 'Bash',
-  tool_input: { command: 'ls' },
-  transcript_path: '/tmp/test.jsonl',
-});
+function pendingPath(sid)  { return path.join(STATE_DIR, `pending_${sid}.json`); }
+function decisionPath(sid) { return path.join(STATE_DIR, `decision_${sid}.json`); }
 
-function cleanup() {
-  for (const p of [PENDING_PATH, DECISION_PATH]) {
+function cleanup(sid) {
+  for (const p of [pendingPath(sid), decisionPath(sid)]) {
     try { fs.unlinkSync(p); } catch { /* ok */ }
   }
 }
 
-function runHook(env = {}) {
+function runHook(sid, env = {}) {
+  const fixture = JSON.stringify({
+    session_id: sid,
+    tool_name: 'Bash',
+    tool_input: { command: 'cp src dst' },
+    transcript_path: '/tmp/test.jsonl',
+  });
+
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [HOOK], {
       env: { ...process.env, ...env },
@@ -31,69 +32,87 @@ function runHook(env = {}) {
     });
 
     let stderr = '';
+    let stdout = '';
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.stdin.write(FIXTURE);
+    child.stdin.write(fixture);
     child.stdin.end();
 
-    child.on('close', (code) => resolve({ code, stderr: stderr.trim() }));
+    child.on('close', (code) => {
+      resolve({ code, stdout: stdout.trim(), stderr: stderr.trim() });
+    });
   });
 }
 
-// ── Test 1: timeout → exit 1 ──────────────────────────────────────────────
-test('no decision file → exit 1 after timeout', async () => {
-  cleanup();
-  const { code } = await runHook({ POLL_TIMEOUT_MS: '600' });
-  assert.equal(code, 1);
+// ── Test 1: app dead → exit 0 with defer ─────────────────────────────────────
+// WAKAWAKA_PROCESS_NAME=__nonexistent__ makes pgrep always return dead
+// without needing to kill the real WakaWaka process.
+test('no decision file and app dead → exit 0 with defer', async () => {
+  const sid = 'test-timeout-dead';
+  cleanup(sid);
+  const { code, stdout } = await runHook(sid, {
+    WAKAWAKA_PROCESS_NAME: '__nonexistent__',
+    APP_DEAD_GRACE_MS: '600',
+    APP_CHECK_EVERY_MS: '0',
+  });
+  assert.equal(code, 0);
+  const parsed = JSON.parse(stdout);
+  assert.equal(parsed.hookSpecificOutput?.permissionDecision, 'defer');
 });
 
 // ── Test 2: allow → exit 0 ────────────────────────────────────────────────
 test('decision allow → exit 0', async () => {
-  cleanup();
+  const sid = 'test-allow';
+  cleanup(sid);
   fs.mkdirSync(STATE_DIR, { recursive: true });
 
-  // Write decision after a short delay so hook has time to write pending first
-  const hookPromise = runHook({ POLL_TIMEOUT_MS: '5000' });
+  const hookPromise = runHook(sid, { FINAL_TIMEOUT_MS: '5000' });
   await new Promise((r) => setTimeout(r, 300));
-  fs.writeFileSync(DECISION_PATH, JSON.stringify({ decision: 'allow' }));
+  fs.writeFileSync(decisionPath(sid), JSON.stringify({ decision: 'allow' }));
 
   const { code } = await hookPromise;
   assert.equal(code, 0);
-  assert.ok(!fs.existsSync(DECISION_PATH), 'decision.json should be deleted');
+  assert.ok(!fs.existsSync(decisionPath(sid)), 'decision file should be deleted');
+  cleanup(sid);
 });
 
 // ── Test 3: deny → exit 2 + reason on stderr ─────────────────────────────
 test('decision deny → exit 2 + reason on stderr', async () => {
-  cleanup();
+  const sid = 'test-deny';
+  cleanup(sid);
   fs.mkdirSync(STATE_DIR, { recursive: true });
 
-  const hookPromise = runHook({ POLL_TIMEOUT_MS: '5000' });
+  const hookPromise = runHook(sid, { FINAL_TIMEOUT_MS: '5000' });
   await new Promise((r) => setTimeout(r, 300));
   fs.writeFileSync(
-    DECISION_PATH,
+    decisionPath(sid),
     JSON.stringify({ decision: 'deny', reason: 'User denied' }),
   );
 
   const { code, stderr } = await hookPromise;
   assert.equal(code, 2);
   assert.equal(stderr, 'User denied');
-  assert.ok(!fs.existsSync(DECISION_PATH), 'decision.json should be deleted');
+  assert.ok(!fs.existsSync(decisionPath(sid)), 'decision file should be deleted');
+  cleanup(sid);
 });
 
-// ── Test 4: pending.json written correctly ────────────────────────────────
-test('pending.json contains correct fields', async () => {
-  cleanup();
+// ── Test 4: pending file written correctly ────────────────────────────────
+test('pending file contains correct fields', async () => {
+  const sid = 'test-fields';
+  cleanup(sid);
   fs.mkdirSync(STATE_DIR, { recursive: true });
 
-  const hookPromise = runHook({ POLL_TIMEOUT_MS: '5000' });
+  const hookPromise = runHook(sid, { FINAL_TIMEOUT_MS: '5000' });
   await new Promise((r) => setTimeout(r, 300));
 
-  const pending = JSON.parse(fs.readFileSync(PENDING_PATH, 'utf8'));
-  assert.equal(pending.session_id, 'test-session');
+  const pending = JSON.parse(fs.readFileSync(pendingPath(sid), 'utf8'));
+  assert.equal(pending.session_id, sid);
   assert.equal(pending.tool_name, 'Bash');
-  assert.deepEqual(pending.tool_input, { command: 'ls' });
+  assert.deepEqual(pending.tool_input, { command: 'cp src dst' });
   assert.ok(pending.timestamp, 'should have timestamp');
 
-  // Clean up by letting hook time out
-  fs.writeFileSync(DECISION_PATH, JSON.stringify({ decision: 'allow' }));
+  // Clean up by letting hook exit with allow
+  fs.writeFileSync(decisionPath(sid), JSON.stringify({ decision: 'allow' }));
   await hookPromise;
+  cleanup(sid);
 });

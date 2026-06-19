@@ -2,15 +2,18 @@
 import PackageDescription
 
 let package = Package(
-    name: "CostNotch",
+    name: "WakaWaka",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "CostNotch",
-            path: "Sources/CostNotch",
+            name: "WakaWaka",
+            path: "Sources/WakaWaka",
             swiftSettings: [
                 // MVP: relax strict concurrency to focus on functionality
                 .unsafeFlags(["-strict-concurrency=minimal"])
+            ],
+            linkerSettings: [
+                .linkedFramework("UserNotifications"),
             ]
         )
     ]
