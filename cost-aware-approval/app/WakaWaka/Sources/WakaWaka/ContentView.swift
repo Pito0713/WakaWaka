@@ -90,6 +90,8 @@ private struct QueueItemRow: View {
     @AppStorage(ClaudePlan.detectedLimitKey) private var detectedLimit: Int = 0
     @AppStorage("manualPlanLimit")           private var manualLimit:   Int = 0
 
+    @State private var isRowHovered = false
+
     // ── Per-item countdown ────────────────────────────────────────────────────
     /// Must match FINAL_TIMEOUT_MS in pretooluse.mjs (9m50s = 590s)
     private static let hookTimeoutSeconds: Double = 590
@@ -148,8 +150,9 @@ private struct QueueItemRow: View {
                     // Expand/collapse chevron
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(isRowHovered && !isExpanded ? Color.primary.opacity(0.6) : .secondary)
                         .frame(width: 14)
+                        .animation(.easeInOut(duration: 0.12), value: isRowHovered)
 
                     // Risk dot
                     Circle()
@@ -164,7 +167,8 @@ private struct QueueItemRow: View {
                             Text(item.toolInputSummary)
                                 .font(.system(.caption, design: .monospaced))
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                .lineLimit(isRowHovered && !isExpanded ? 3 : 1)
+                                .animation(.easeInOut(duration: 0.15), value: isRowHovered)
                         }
                     }
 
@@ -202,9 +206,16 @@ private struct QueueItemRow: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
+                .background(
+                    isRowHovered && !isExpanded
+                        ? Color.secondary.opacity(0.06)
+                        : Color.clear
+                )
+                .animation(.easeInOut(duration: 0.12), value: isRowHovered)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .onHover { isRowHovered = $0 }
             .onReceive(ticker) { t in now = t }
 
             // ── Expanded detail ─────────────────────────────────────────

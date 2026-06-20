@@ -48,7 +48,7 @@ private indirect enum JSONValue: Decodable {
 // MARK: - Diff sections (colored blocks in detail view)
 
 struct DiffSection: Identifiable {
-    enum Kind { case header, removed, added, plain }
+    enum Kind: Equatable { case header, removed, added, plain }
     let id   = UUID()
     let kind: Kind
     let text: String
@@ -149,8 +149,7 @@ struct PendingData: Decodable {
             if let r = replace, r == "true" {
                 sections.append(.init(kind: .header, text: "replace_all: true"))
             }
-            if !old.isEmpty { sections.append(.init(kind: .removed, text: cap(old, 800))) }
-            if !new.isEmpty { sections.append(.init(kind: .added,   text: cap(new, 800))) }
+            sections += lineDiff(old: old, new: new)
             return sections
 
         case "MultiEdit":
@@ -160,8 +159,8 @@ struct PendingData: Decodable {
                 for (i, edit) in edits.enumerated() {
                     if case .object(let e) = edit {
                         sections.append(.init(kind: .header, text: "── 修改 \(i + 1) ──"))
-                        if let o = e["old_string"]?.str { sections.append(.init(kind: .removed, text: cap(o, 300))) }
-                        if let n = e["new_string"]?.str { sections.append(.init(kind: .added,   text: cap(n, 300))) }
+                        sections += lineDiff(old: e["old_string"]?.str ?? "",
+                                             new: e["new_string"]?.str ?? "")
                     }
                 }
             }
@@ -217,6 +216,66 @@ struct PendingData: Decodable {
     }
 
     // MARK: - Helpers
+
+    /// LCS-based line diff: interleaves removed (red) and added (green) lines.
+    /// Falls back to two-block display when either side exceeds 150 lines.
+    private static func lineDiff(old: String, new: String) -> [DiffSection] {
+        guard !old.isEmpty || !new.isEmpty else { return [] }
+        let oldLines = old.components(separatedBy: "\n")
+        let newLines = new.components(separatedBy: "\n")
+        let m = oldLines.count, n = newLines.count
+
+        guard m <= 150, n <= 150 else {
+            var out: [DiffSection] = []
+            if !old.isEmpty { out.append(.init(kind: .removed, text: cap(old, 800))) }
+            if !new.isEmpty { out.append(.init(kind: .added,   text: cap(new, 800))) }
+            return out
+        }
+
+        // DP table for LCS
+        var dp = Array(repeating: Array(repeating: 0, count: n + 1), count: m + 1)
+        for i in 1...m {
+            for j in 1...n {
+                dp[i][j] = oldLines[i-1] == newLines[j-1]
+                    ? dp[i-1][j-1] + 1
+                    : max(dp[i-1][j], dp[i][j-1])
+            }
+        }
+
+        // Backtrack → (kind, line) pairs
+        var raw: [(DiffSection.Kind, String)] = []
+        var i = m, j = n
+        while i > 0 || j > 0 {
+            if i > 0, j > 0, oldLines[i-1] == newLines[j-1] {
+                raw.append((.plain,   oldLines[i-1])); i -= 1; j -= 1
+            } else if j > 0, (i == 0 || dp[i][j-1] >= dp[i-1][j]) {
+                raw.append((.added,   newLines[j-1])); j -= 1
+            } else {
+                raw.append((.removed, oldLines[i-1])); i -= 1
+            }
+        }
+        raw.reverse()
+
+        // Group consecutive same-kind lines into DiffSections
+        var sections: [DiffSection] = []
+        var curKind: DiffSection.Kind? = nil
+        var curLines: [String] = []
+        for (kind, line) in raw {
+            if kind == curKind {
+                curLines.append(line)
+            } else {
+                if let k = curKind, !curLines.isEmpty {
+                    sections.append(.init(kind: k, text: curLines.joined(separator: "\n")))
+                }
+                curKind  = kind
+                curLines = [line]
+            }
+        }
+        if let k = curKind, !curLines.isEmpty {
+            sections.append(.init(kind: k, text: curLines.joined(separator: "\n")))
+        }
+        return sections
+    }
 
     /// Shorten absolute path to last 3 components
     private static func shortenPath(_ path: String) -> String {

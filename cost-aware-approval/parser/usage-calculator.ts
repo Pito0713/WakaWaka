@@ -155,7 +155,6 @@ export async function calculateUsage(transcriptPath: string): Promise<UsageSnaps
   let prev: CumulativePoint | null = null;
   let seen = 0;
 
-  let sessionWindowEndMs: number | null = null;
   let sessionRunning: CumulativePoint = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
   let sessionStartISO: string | null = null;
 
@@ -190,18 +189,23 @@ export async function calculateUsage(transcriptPath: string): Promise<UsageSnaps
       };
     }
 
-    // Session window: advance or reset when crossing the 5h boundary
-    if (timestampISO && !Number.isNaN(tsMs)) {
-      if (sessionWindowEndMs === null || tsMs >= sessionWindowEndMs) {
-        sessionWindowEndMs = tsMs + SESSION_WINDOW_MS;
-        sessionStartISO    = timestampISO;
-        sessionRunning     = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
-      }
+  }
+
+  // True sliding window: recompute session totals from entries within last 5h.
+  // Overrides the old fixed-boundary approach so the result matches Claude's
+  // actual server-side logic (reset = oldest counted entry + 5h).
+  {
+    const windowCutoff = Date.now() - SESSION_WINDOW_MS;
+    sessionStartISO = null;
+    sessionRunning  = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+    for (const entry of entries) {
+      if (entry.isHumanTurn || entry.tsMs < windowCutoff) continue;
+      if (sessionStartISO === null) sessionStartISO = entry.timestampISO;
       sessionRunning = {
-        input:         sessionRunning.input         + delta.input,
-        output:        sessionRunning.output        + delta.output,
-        cacheRead:     sessionRunning.cacheRead     + delta.cacheRead,
-        cacheCreation: sessionRunning.cacheCreation + delta.cacheCreation,
+        input:         sessionRunning.input         + entry.delta.input,
+        output:        sessionRunning.output        + entry.delta.output,
+        cacheRead:     sessionRunning.cacheRead     + entry.delta.cacheRead,
+        cacheCreation: sessionRunning.cacheCreation + entry.delta.cacheCreation,
       };
     }
   }
@@ -342,21 +346,19 @@ async function computeGlobalSession(files: string[]): Promise<{
     return { sessionStartISO: null, sessionOutput: 0, sessionInput: 0, sessionCacheRead: 0, sessionCacheCreation: 0 };
   }
 
-  // Pass 2: sort unified timeline, apply fixed-boundary window scan
-  // (identical to p90-detector's window loop — the 20% difference is that we
-  //  also track all 4 token types and preserve the current window's startISO)
+  // Pass 2: true sliding window — include every entry whose timestamp falls
+  // within the last 5 hours from now.  This matches Claude's actual server-side
+  // rate-limit logic: the quota resets when the oldest counted entry ages past
+  // 5 hours, so sessionStartISO (= oldest entry in window) + 5h = reset time.
   const entries = Array.from(dedup.values()).sort((a, b) => a.tsMs - b.tsMs);
 
-  let winEndMs: number | null = null;
+  const windowCutoff = Date.now() - SESSION_WINDOW_MS;
   let sessionStartISO: string | null = null;
   let out = 0, inp = 0, cr = 0, cw = 0;
 
   for (const entry of entries) {
-    if (winEndMs === null || entry.tsMs >= winEndMs) {
-      winEndMs        = entry.tsMs + SESSION_WINDOW_MS;
-      sessionStartISO = entry.timestampISO;
-      out = 0; inp = 0; cr = 0; cw = 0;
-    }
+    if (entry.tsMs < windowCutoff) continue;
+    if (sessionStartISO === null) sessionStartISO = entry.timestampISO;
     out += entry.out;
     inp += entry.inp;
     cr  += entry.cr;

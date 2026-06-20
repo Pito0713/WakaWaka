@@ -322,10 +322,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let progress = Double(out) / Double(limit)
         let pct      = Int(progress * 100)
 
-        // Reset tracking when session window rolls over
+        // Reset threshold tracking when the 5-hour quota window genuinely rolls over.
+        // With the sliding-window algorithm, sessionStartISO advances gradually as old
+        // entries age out — so we only clear thresholds when output has actually dropped
+        // (i.e. the window truly reset), not merely because sessionStartISO ticked forward.
         if usage.sessionStartISO != notifiedWindowISO {
-            notifiedWindowISO  = usage.sessionStartISO
-            notifiedThresholds = []
+            notifiedWindowISO = usage.sessionStartISO
+            if progress < 0.15 {
+                notifiedThresholds = []
+            }
         }
 
         let thresholds: [(Int, String, String)] = [
