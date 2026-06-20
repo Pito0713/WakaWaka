@@ -47,11 +47,15 @@ private indirect enum JSONValue: Decodable {
 
 // MARK: - Diff sections (colored blocks in detail view)
 
-struct DiffSection: Identifiable {
-    enum Kind { case header, removed, added, plain }
+struct DiffSection: Identifiable, Equatable {
+    enum Kind: Equatable { case header, removed, added, plain }
     let id   = UUID()
     let kind: Kind
     let text: String
+
+    static func == (lhs: DiffSection, rhs: DiffSection) -> Bool {
+        lhs.kind == rhs.kind && lhs.text == rhs.text
+    }
 }
 
 // MARK: - pending_<session_id>.json
@@ -69,8 +73,10 @@ struct PendingData: Decodable {
 
     /// 單行標題：顯示在 tool 名稱旁（路徑或指令前幾字）
     let toolInputSummary: String
-    /// 完整內容：帶顏色色塊的結構化區塊（removed=紅, added=綠）
+    /// 帶顏色色塊的結構化區塊（removed=紅, added=綠）；文字截斷至合理長度
     let toolInputSections: [DiffSection]
+    /// 同上，但不截斷文字——用於「展開全文」模式
+    let toolInputSectionsFull: [DiffSection]
 
     /// Set to true when the hook process exited before the user made a decision
     /// (timeout or Claude Code killed the hook). WakaWaka shows "已逾時" state.
@@ -84,10 +90,14 @@ struct PendingData: Decodable {
     /// True when this item is a tombstone (hook already gone; tool was NOT executed).
     var isExpired: Bool { hookExited == true }
 
+    /// Originating agent: "agy", "claude-code", or nil (treated as Claude Code).
+    let agent: String?
+
     enum CodingKeys: String, CodingKey {
         case session_id, tool_name, risk_level, transcript_path, timestamp, tool_input
         case hookExited, hookExitedAt
         case hookUrgent
+        case agent
     }
 
     init(from decoder: Decoder) throws {
@@ -100,10 +110,12 @@ struct PendingData: Decodable {
         hookExited      = try c.decodeIfPresent(Bool.self,       forKey: .hookExited)
         hookExitedAt    = try c.decodeIfPresent(String.self,    forKey: .hookExitedAt)
         hookUrgent      = try c.decodeIfPresent(Bool.self,       forKey: .hookUrgent)
+        agent           = try c.decodeIfPresent(String.self,    forKey: .agent)
 
         let raw = try? c.decode([String: JSONValue].self, forKey: .tool_input)
-        toolInputSummary  = Self.buildSummary(toolName: tool_name, raw: raw)
-        toolInputSections = Self.buildSections(toolName: tool_name, raw: raw)
+        toolInputSummary      = Self.buildSummary(toolName: tool_name, raw: raw)
+        toolInputSections     = Self.buildSections(toolName: tool_name, raw: raw, full: false)
+        toolInputSectionsFull = Self.buildSections(toolName: tool_name, raw: raw, full: true)
     }
 
     // MARK: - Summary（單行標題）
@@ -135,8 +147,9 @@ struct PendingData: Decodable {
 
     // MARK: - Sections（帶顏色的結構化內容區塊）
 
-    private static func buildSections(toolName: String?, raw: [String: JSONValue]?) -> [DiffSection] {
+    private static func buildSections(toolName: String?, raw: [String: JSONValue]?, full: Bool) -> [DiffSection] {
         guard let raw, !raw.isEmpty else { return [] }
+        let limit = full ? Int.max : 0  // 0 signals "use per-type caps"
 
         switch toolName {
 
@@ -149,8 +162,7 @@ struct PendingData: Decodable {
             if let r = replace, r == "true" {
                 sections.append(.init(kind: .header, text: "replace_all: true"))
             }
-            if !old.isEmpty { sections.append(.init(kind: .removed, text: cap(old, 800))) }
-            if !new.isEmpty { sections.append(.init(kind: .added,   text: cap(new, 800))) }
+            sections += lineDiff(old: old, new: new, full: full)
             return sections
 
         case "MultiEdit":
@@ -160,30 +172,32 @@ struct PendingData: Decodable {
                 for (i, edit) in edits.enumerated() {
                     if case .object(let e) = edit {
                         sections.append(.init(kind: .header, text: "── 修改 \(i + 1) ──"))
-                        if let o = e["old_string"]?.str { sections.append(.init(kind: .removed, text: cap(o, 300))) }
-                        if let n = e["new_string"]?.str { sections.append(.init(kind: .added,   text: cap(n, 300))) }
+                        sections += lineDiff(old: e["old_string"]?.str ?? "",
+                                             new: e["new_string"]?.str ?? "",
+                                             full: full)
                     }
                 }
             }
             return sections
 
-        case "Write":
-            let file    = raw["file_path"]?.str ?? "?"
+        case "Write", "write_to_file", "write_file", "create_file":
+            let file    = raw["file_path"]?.str ?? raw["path"]?.str ?? "?"
             let content = raw["content"]?.str ?? ""
+            let shown   = full ? content : cap(content, 1000)
             return [
                 .init(kind: .header, text: "📄 \(file)"),
-                .init(kind: .plain,  text: content.isEmpty ? "(empty file)" : cap(content, 1000)),
+                .init(kind: .plain,  text: content.isEmpty ? "(empty file)" : shown),
             ]
 
-        case "Bash":
-            return [.init(kind: .plain, text: raw["command"]?.str ?? "(no command)")]
+        case "Bash", "run_command", "run_shell_command":
+            return [.init(kind: .plain, text: raw["command"]?.str ?? raw["cmd"]?.str ?? "(no command)")]
 
         case "WebFetch":
             let url    = raw["url"]?.str ?? "?"
             let method = raw["method"]?.str ?? "GET"
             var sections: [DiffSection] = [.init(kind: .header, text: "\(method)  \(url)")]
             if let body = raw["body"]?.str, !body.isEmpty {
-                sections.append(.init(kind: .plain, text: cap(body, 500)))
+                sections.append(.init(kind: .plain, text: full ? body : cap(body, 500)))
             }
             return sections
 
@@ -195,17 +209,26 @@ struct PendingData: Decodable {
             }
             return sections
 
-        case "Read":
-            var sections: [DiffSection] = [.init(kind: .header, text: "📄 \(raw["file_path"]?.str ?? "?")")]
+        case "Read", "view_file", "read_file":
+            let filePath = raw["file_path"]?.str ?? raw["path"]?.str ?? "?"
+            var sections: [DiffSection] = [.init(kind: .header, text: "📄 \(filePath)")]
             if let offset = raw["offset"]?.displayString { sections.append(.init(kind: .plain, text: "offset: \(offset)")) }
-            if let limit  = raw["limit"]?.displayString  { sections.append(.init(kind: .plain, text: "limit: \(limit)")) }
+            if let lim    = raw["limit"]?.displayString  { sections.append(.init(kind: .plain, text: "limit: \(lim)")) }
             return sections
 
         case "NotebookEdit":
             let file = raw["notebook_path"]?.str ?? "?"
             var sections: [DiffSection] = [.init(kind: .header, text: "📄 \(file)")]
-            let op = raw["new_source"]?.str.map { cap($0, 400) } ?? raw["cell_type"]?.str
+            let op = raw["new_source"]?.str.map { full ? $0 : cap($0, 400) } ?? raw["cell_type"]?.str
             if let op { sections.append(.init(kind: .plain, text: op)) }
+            return sections
+
+        case "replace_file_content", "edit_file":
+            let file    = raw["path"]?.str ?? raw["file_path"]?.str ?? "?"
+            let old     = raw["old_content"]?.str ?? raw["old_string"]?.str ?? ""
+            let new     = raw["new_content"]?.str ?? raw["new_string"]?.str ?? ""
+            var sections: [DiffSection] = [.init(kind: .header, text: "📄 \(file)")]
+            sections += lineDiff(old: old, new: new, full: full)
             return sections
 
         default:
@@ -217,6 +240,68 @@ struct PendingData: Decodable {
     }
 
     // MARK: - Helpers
+
+    /// LCS-based line diff: interleaves removed (red) and added (green) lines.
+    /// Falls back to two-block display when either side exceeds 150 lines.
+    /// `full: true` removes text caps and raises the fallback LCS line limit to 500.
+    private static func lineDiff(old: String, new: String, full: Bool = false) -> [DiffSection] {
+        guard !old.isEmpty || !new.isEmpty else { return [] }
+        let oldLines = old.components(separatedBy: "\n")
+        let newLines = new.components(separatedBy: "\n")
+        let m = oldLines.count, n = newLines.count
+        let lcsLimit = full ? 500 : 150
+
+        guard m <= lcsLimit, n <= lcsLimit else {
+            var out: [DiffSection] = []
+            if !old.isEmpty { out.append(.init(kind: .removed, text: full ? old : cap(old, 800))) }
+            if !new.isEmpty { out.append(.init(kind: .added,   text: full ? new : cap(new, 800))) }
+            return out
+        }
+
+        // DP table for LCS
+        var dp = Array(repeating: Array(repeating: 0, count: n + 1), count: m + 1)
+        for i in 1...m {
+            for j in 1...n {
+                dp[i][j] = oldLines[i-1] == newLines[j-1]
+                    ? dp[i-1][j-1] + 1
+                    : max(dp[i-1][j], dp[i][j-1])
+            }
+        }
+
+        // Backtrack → (kind, line) pairs
+        var raw: [(DiffSection.Kind, String)] = []
+        var i = m, j = n
+        while i > 0 || j > 0 {
+            if i > 0, j > 0, oldLines[i-1] == newLines[j-1] {
+                raw.append((.plain,   oldLines[i-1])); i -= 1; j -= 1
+            } else if j > 0, (i == 0 || dp[i][j-1] >= dp[i-1][j]) {
+                raw.append((.added,   newLines[j-1])); j -= 1
+            } else {
+                raw.append((.removed, oldLines[i-1])); i -= 1
+            }
+        }
+        raw.reverse()
+
+        // Group consecutive same-kind lines into DiffSections
+        var sections: [DiffSection] = []
+        var curKind: DiffSection.Kind? = nil
+        var curLines: [String] = []
+        for (kind, line) in raw {
+            if kind == curKind {
+                curLines.append(line)
+            } else {
+                if let k = curKind, !curLines.isEmpty {
+                    sections.append(.init(kind: k, text: curLines.joined(separator: "\n")))
+                }
+                curKind  = kind
+                curLines = [line]
+            }
+        }
+        if let k = curKind, !curLines.isEmpty {
+            sections.append(.init(kind: k, text: curLines.joined(separator: "\n")))
+        }
+        return sections
+    }
 
     /// Shorten absolute path to last 3 components
     private static func shortenPath(_ path: String) -> String {
@@ -345,6 +430,26 @@ struct UsageOutput: Codable {
     var resetsInText: String {
         guard let r = sessionReset else { return "—" }
         let rem = r.timeIntervalSinceNow
+        guard rem > 0 else { return "Resetting…" }
+        let h = Int(rem) / 3600
+        let m = (Int(rem) % 3600) / 60
+        return h > 0 ? "Resets in \(h)h \(m)m" : "Resets in \(m)m"
+    }
+}
+
+// MARK: - Server-side usage from `claude -p "/usage"`
+
+struct ClaudeUsageInfo {
+    let sessionPct: Int       // e.g. 67
+    let sessionReset: Date?   // parsed from "resets Jun 20 at 5:50pm (Asia/Taipei)"
+    let weeklyPct: Int?       // e.g. 10
+    let fetchedAt: Date
+
+    /// True when the data is older than 11 minutes (one polling interval missed).
+    var isStale: Bool { Date().timeIntervalSince(fetchedAt) > 660 }
+
+    static func resetsInText(from reset: Date) -> String {
+        let rem = reset.timeIntervalSinceNow
         guard rem > 0 else { return "Resetting…" }
         let h = Int(rem) / 3600
         let m = (Int(rem) % 3600) / 60

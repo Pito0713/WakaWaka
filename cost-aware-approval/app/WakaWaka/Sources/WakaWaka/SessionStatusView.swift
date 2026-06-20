@@ -10,6 +10,8 @@ import SwiftUI
 struct SessionStatusView: View {
     let usage: UsageOutput?
     let isLoading: Bool
+    /// Server-verified data from `claude -p "/usage"` — overrides local estimates when present.
+    var claudeUsage: ClaudeUsageInfo? = nil
     /// Called when the user taps the manual-refresh button (↺).
     var onRefresh: (() -> Void)? = nil
 
@@ -47,8 +49,24 @@ struct SessionStatusView: View {
     }
 
     private func tokenProgress(_ u: UsageOutput) -> Double {
+        if let ci = claudeUsage, !ci.isStale {
+            return min(Double(ci.sessionPct) / 100.0, 1.0)
+        }
         guard let out = u.sessionOutput else { return u.sessionTokenProgress(planLimit: planLimit) }
         return min(Double(out) / Double(planLimit), 1.0)
+    }
+
+    /// Reset text: uses server reset time when available, falls back to JSONL estimate.
+    private func resetsInText(for u: UsageOutput) -> String {
+        if let ci = claudeUsage, !ci.isStale, let r = ci.sessionReset {
+            return ClaudeUsageInfo.resetsInText(from: r)
+        }
+        return u.resetsInText
+    }
+
+    /// True when displaying server-verified data (green dot indicator).
+    private var hasServerData: Bool {
+        claudeUsage.map { !$0.isStale } ?? false
     }
 
     // MARK: - Body
@@ -105,7 +123,15 @@ struct SessionStatusView: View {
 
             Spacer()
 
-            Text(u.resetsInText)
+            // Green dot when displaying server-verified data
+            if hasServerData {
+                Circle()
+                    .fill(Color.green.opacity(0.85))
+                    .frame(width: 5, height: 5)
+                    .help("Server 驗證：數據來自 claude /usage")
+            }
+
+            Text(resetsInText(for: u))
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 .id(now)
 
@@ -115,8 +141,8 @@ struct SessionStatusView: View {
                     guard !isRefreshing else { return }
                     isRefreshing = true
                     refresh()
-                    // Brief visual feedback: spinning state auto-clears after 2s
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    // Keep spinning until both JSONL parser (~0.5s) and /usage (~2.1s) finish
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                         isRefreshing = false
                     }
                 } label: {

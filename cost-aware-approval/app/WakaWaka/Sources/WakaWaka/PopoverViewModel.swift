@@ -16,6 +16,10 @@ final class PopoverViewModel: ObservableObject {
     @Published var sessionStatus: UsageOutput?
     @Published var isLoadingSession: Bool = false
 
+    /// Server-verified usage from `claude -p "/usage"` (updated every 10 min + on manual refresh)
+    @Published var claudeUsageInfo: ClaudeUsageInfo? = nil
+    @Published var isLoadingClaudeUsage: Bool = false
+
     var onAllow:          (Int) -> Void = { _ in }
     var onAlwaysAllow:    (Int) -> Void = { _ in }
     var onDeny:           (Int) -> Void = { _ in }

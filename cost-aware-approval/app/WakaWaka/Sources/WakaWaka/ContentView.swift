@@ -55,6 +55,7 @@ struct ContentView: View {
             SessionStatusView(
                 usage: model.sessionStatus,
                 isLoading: model.isLoadingSession,
+                claudeUsage: model.claudeUsageInfo,
                 onRefresh: { model.onRefreshSession() }
             )
         }
@@ -89,6 +90,9 @@ private struct QueueItemRow: View {
 
     @AppStorage(ClaudePlan.detectedLimitKey) private var detectedLimit: Int = 0
     @AppStorage("manualPlanLimit")           private var manualLimit:   Int = 0
+
+    @State private var isRowHovered = false
+    @State private var isDetailExpanded = false
 
     // ── Per-item countdown ────────────────────────────────────────────────────
     /// Must match FINAL_TIMEOUT_MS in pretooluse.mjs (9m50s = 590s)
@@ -137,8 +141,23 @@ private struct QueueItemRow: View {
     }
 
     private var risk:    RiskLevel { item.risk_level ?? .medium }
-    private var isBash:  Bool      { item.tool_name == "Bash" }
+    private var isBash:  Bool      {
+        item.tool_name == "Bash" || item.tool_name == "run_command" || item.tool_name == "run_shell_command"
+    }
     private var canAlwaysAllow: Bool { isBash && risk == .medium }
+
+    /// Label and color for the agent badge — every pending item shows one.
+    private var agentInfo: (label: String, color: Color) {
+        switch item.agent {
+        case "agy":
+            return ("agy", Color(red: 0.45, green: 0.25, blue: 0.95))
+        case "claude-code", .none:
+            // nil means Claude Code (pre-multi-agent pending files)
+            return ("Claude", Color(red: 0.87, green: 0.38, blue: 0.18))
+        default:
+            return (item.agent ?? "?", .secondary)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -148,8 +167,9 @@ private struct QueueItemRow: View {
                     // Expand/collapse chevron
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(isRowHovered && !isExpanded ? Color.primary.opacity(0.6) : .secondary)
                         .frame(width: 14)
+                        .animation(.easeInOut(duration: 0.12), value: isRowHovered)
 
                     // Risk dot
                     Circle()
@@ -158,13 +178,23 @@ private struct QueueItemRow: View {
 
                     // Tool + summary
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(item.tool_name ?? "Tool")
-                            .font(.subheadline.weight(.medium))
+                        HStack(spacing: 5) {
+                            Text(item.tool_name ?? "Tool")
+                                .font(.subheadline.weight(.medium))
+                            let agent = agentInfo
+                            Text(agent.label)
+                                .font(.caption2.weight(.bold))
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(agent.color.opacity(0.14))
+                                .foregroundStyle(agent.color)
+                                .clipShape(Capsule())
+                        }
                         if !item.toolInputSummary.isEmpty {
                             Text(item.toolInputSummary)
                                 .font(.system(.caption, design: .monospaced))
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                .lineLimit(isRowHovered && !isExpanded ? 3 : 1)
+                                .animation(.easeInOut(duration: 0.15), value: isRowHovered)
                         }
                     }
 
@@ -202,9 +232,16 @@ private struct QueueItemRow: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
+                .background(
+                    isRowHovered && !isExpanded
+                        ? Color.secondary.opacity(0.06)
+                        : Color.clear
+                )
+                .animation(.easeInOut(duration: 0.12), value: isRowHovered)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .onHover { isRowHovered = $0 }
             .onReceive(ticker) { t in now = t }
 
             // ── Expanded detail ─────────────────────────────────────────
@@ -239,15 +276,42 @@ private struct QueueItemRow: View {
 
             // Full detail scroll area (colored diff blocks)
             if !item.toolInputSections.isEmpty {
-                ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(item.toolInputSections) { section in
-                            diffSectionView(section)
+                let sections = isDetailExpanded ? item.toolInputSectionsFull : item.toolInputSections
+                let hasTruncation = item.toolInputSections != item.toolInputSectionsFull
+
+                VStack(alignment: .leading, spacing: 0) {
+                    ScrollView(.vertical) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(sections) { section in
+                                diffSectionView(section)
+                            }
                         }
+                        .padding(4)
                     }
-                    .padding(4)
+                    .frame(maxHeight: isDetailExpanded ? 520 : 220)
+                    .animation(.easeInOut(duration: 0.22), value: isDetailExpanded)
+
+                    // Show more / collapse toggle (only when content is truncated)
+                    if hasTruncation {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.22)) {
+                                isDetailExpanded.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: isDetailExpanded ? "chevron.up" : "chevron.down")
+                                    .font(.caption2.weight(.semibold))
+                                Text(isDetailExpanded ? "收合" : "展開全文")
+                                    .font(.caption2.weight(.semibold))
+                            }
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                            .background(Color.secondary.opacity(0.06))
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .frame(maxHeight: 220)
                 .background(Color(NSColor.textBackgroundColor).opacity(0.6))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6)

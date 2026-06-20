@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Session status (always-visible bar)
     private var sessionStatusTimer: Timer?
+    // Server-verified usage via `claude -p "/usage"` (10-minute interval)
+    private var usageCommandTimer: Timer?
 
     // Notification tracking: avoid re-firing within the same session window
     private var notifiedWindowISO: String?
@@ -36,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupPopover()
         startPolling()
         startSessionStatusPolling()
+        startUsageCommandPolling()
         startP90Detection()
         requestNotificationPermission()
         startIconAnimation()
@@ -57,7 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.onDeny           = { [weak self] i in self?.deny(at: i) }
         viewModel.onToggleExpand   = { [weak self] i in self?.toggleExpand(i) }
         viewModel.onDismiss        = { [weak self] i in self?.dismiss(at: i) }
-        viewModel.onRefreshSession = { [weak self] in self?.fetchSessionStatus() }
+        viewModel.onRefreshSession = { [weak self] in
+            self?.fetchSessionStatus()
+            self?.fetchUsageCommand()
+        }
 
         popover = NSPopover()
         popover.behavior = .applicationDefined
@@ -179,6 +185,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         RunLoop.main.add(t, forMode: .common)
         sessionStatusTimer = t
+    }
+
+    // MARK: - Server-verified usage (`claude -p "/usage"`, 10-minute interval)
+
+    private func startUsageCommandPolling() {
+        fetchUsageCommand()
+        let t = Timer(timeInterval: 600, repeats: true) { [weak self] _ in
+            self?.fetchUsageCommand()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        usageCommandTimer = t
+    }
+
+    private func fetchUsageCommand() {
+        viewModel.isLoadingClaudeUsage = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = ParserRunner.runClaudeUsage()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.viewModel.claudeUsageInfo    = result
+                self.viewModel.isLoadingClaudeUsage = false
+            }
+        }
     }
 
     /// Aggregate session usage across ALL recent JSONL files in ~/.claude/projects.
@@ -322,10 +351,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let progress = Double(out) / Double(limit)
         let pct      = Int(progress * 100)
 
-        // Reset tracking when session window rolls over
+        // Reset threshold tracking when the 5-hour quota window genuinely rolls over.
+        // With the sliding-window algorithm, sessionStartISO advances gradually as old
+        // entries age out — so we only clear thresholds when output has actually dropped
+        // (i.e. the window truly reset), not merely because sessionStartISO ticked forward.
         if usage.sessionStartISO != notifiedWindowISO {
-            notifiedWindowISO  = usage.sessionStartISO
-            notifiedThresholds = []
+            notifiedWindowISO = usage.sessionStartISO
+            if progress < 0.15 {
+                notifiedThresholds = []
+            }
         }
 
         let thresholds: [(Int, String, String)] = [
