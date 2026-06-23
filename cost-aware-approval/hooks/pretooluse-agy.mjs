@@ -35,10 +35,11 @@ const AUTO_ALLOW_TOOLS = new Set([
   'view_file',
   'read_file',
   'list_dir',
+  'list_permissions',   // read-only permission info
   'grep_search',
   'search_files',
-  'manage_task',    // in-memory task list, no disk side-effects
-  'schedule',       // scheduling only, no execution
+  'manage_task',        // in-memory task list, no disk side-effects
+  'schedule',           // scheduling only, no execution
 ]);
 
 // ── Safe shell prefixes for run_command (MEDIUM risk) ────────────────────────
@@ -86,8 +87,7 @@ const HIGH_PATTERNS = [
   /\btruncate\s+(table\s+)?\w/i,
 ];
 
-// ── CRITICAL tools: auto-deny without popover ────────────────────────────────
-// delete_file is always dangerous — deny immediately like CRITICAL bash patterns
+// ── CRITICAL tools: show popover at CRITICAL risk (no auto-deny) ─────────────
 const CRITICAL_TOOLS = new Set(['delete_file']);
 
 // ── Write tools: always show popover ─────────────────────────────────────────
@@ -219,11 +219,34 @@ async function main() {
     process.exit(0);
   }
 
-  // agy may send { tool_name, tool_input } (Claude Code compat) or { name, args }
-  const tool_name  = input?.tool_name ?? input?.name ?? null;
-  const tool_input = input?.tool_input ?? input?.args ?? null;
-  const session_id_raw = input?.session_id ?? null;
-  const transcript_path = input?.transcript_path ?? null;
+  // Debug: log raw input to inspect actual agy hook format
+  try {
+    fs.writeFileSync(
+      path.join(os.homedir(), '.wakawaka', 'agy-hook-debug.json'),
+      JSON.stringify(input, null, 2),
+      { encoding: 'utf8' }
+    );
+  } catch { /* best-effort */ }
+
+  // agy actual format: { toolCall: { name, args }, conversationId, transcriptPath, ... }
+  // Also support Claude Code style { tool_name, tool_input, session_id } for compat.
+  const toolCall = input?.toolCall ?? null;
+  const tool_name_raw = input?.tool_name
+                     ?? toolCall?.name
+                     ?? input?.name
+                     ?? input?.toolName
+                     ?? null;
+  // Normalize PascalCase → snake_case so routing sets match (ListDir → list_dir)
+  const tool_name = tool_name_raw
+    ? tool_name_raw.replace(/([A-Z])/g, (c, _, i) => (i > 0 ? '_' : '') + c.toLowerCase())
+    : null;
+  const tool_input = input?.tool_input
+                  ?? toolCall?.args
+                  ?? input?.args
+                  ?? input?.toolArgs
+                  ?? null;
+  const session_id_raw  = input?.session_id ?? input?.conversationId ?? null;
+  const transcript_path = input?.transcript_path ?? input?.transcriptPath ?? null;
 
   const sanitized  = typeof session_id_raw === 'string'
     ? session_id_raw.replace(/[^a-zA-Z0-9_-]/g, '_') : '';
@@ -237,20 +260,25 @@ async function main() {
     process.exit(0);
   }
 
-  // ── Step 2: Critical tools auto-deny ────────────────────────────────────
+  let risk_level = 'medium';
+
+  // ── Step 2: Critical tools — escalate to CRITICAL risk, show popover ────────
   if (CRITICAL_TOOLS.has(tool_name)) {
-    decide('deny', `${tool_name} is blocked (destructive file operation)`);
-    process.stderr.write(`agy tool "${tool_name}" blocked by WakaWaka: destructive\n`);
-    process.exit(2);
+    risk_level = 'critical';
+    // Fall through to Step 5 — user must explicitly approve
   }
 
   // ── Step 3: Shell risk assessment ───────────────────────────────────────
-  let risk_level = 'medium';
 
   const isShellTool = tool_name === 'run_command' || tool_name === 'run_shell_command';
   if (isShellTool) {
-    const command = tool_input?.command ?? tool_input?.cmd ?? '';
-    risk_level = assessShellRisk(command);
+    const command = tool_input?.command ?? tool_input?.cmd ?? tool_input?.CommandLine ?? '';
+    const shellRisk = assessShellRisk(command);
+    // Never downgrade a risk already set by Step 2
+    const riskOrder = { medium: 0, high: 1, critical: 2 };
+    if ((riskOrder[shellRisk] ?? 0) > (riskOrder[risk_level] ?? 0)) {
+      risk_level = shellRisk;
+    }
 
     if (risk_level === 'medium') {
       const prefix = shellPrefix(command);
@@ -358,7 +386,7 @@ async function main() {
 
   if (decision === 'always') {
     if (isShellTool && risk_level === 'medium') {
-      const command = tool_input?.command ?? tool_input?.cmd ?? '';
+      const command = tool_input?.command ?? tool_input?.cmd ?? tool_input?.CommandLine ?? '';
       const prefix = shellPrefix(command);
       if (prefix) {
         const allowlist = loadAllowlist();

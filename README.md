@@ -17,8 +17,9 @@ WakaWaka 透過 **PreToolUse hook** 機制攔截每一個工具呼叫（支援 C
 
 | 功能 | 說明 |
 |------|------|
-| **三層風險分類** | CRITICAL（自動拒絕）→ HIGH（強制彈窗）→ MEDIUM（可設定 allowlist） |
+| **三層風險分類** | CRITICAL（彈窗，需明確確認）→ HIGH（強制彈窗）→ MEDIUM（可設定 allowlist） |
 | **多代理支援** | 同時守護 Claude Code（`pretooluse.mjs`）與 agy（`pretooluse-agy.mjs`），agent badge 顯示來源 |
+| **agy Quota Bar** | 每個 agy 審批卡片即時顯示 Gemini quota 用量（%）與重置倒數（↻ Xh Xm），從 agy local language server 取得 |
 | **Token 用量追蹤** | 從 `~/.claude/projects/` JSONL 解析，全域合併去重，誤差 < 3% |
 | **Server 驗證用量** | `claude -p "/usage"` 每 10 分鐘校正一次，進度條旁綠點表示資料已驗證 |
 | **5h 配額進度條** | 對應 Claude 實際 rate limit 窗口，含重置倒數計時 |
@@ -87,7 +88,8 @@ cost-aware-approval/
         ├── AppDelegate.swift       # 主控：1s 輪詢 + 60s session 刷新 + 10m /usage 校正
         ├── ContentView.swift       # 待審批佇列 UI（agent badge、展開全文）
         ├── SessionStatusView.swift # 5h 用量進度條 + 重置倒數 + server 驗證綠點
-        ├── PopoverViewModel.swift  # UI 狀態管理（含 claudeUsageInfo）
+        ├── PopoverViewModel.swift  # UI 狀態管理（含 claudeUsageInfo、agyQuota）
+        ├── AgyQuotaService.swift   # agy local language server quota 查詢（port 探測 + HTTP）
         ├── ParserRunner.swift      # npx tsx bridge + claude /usage 呼叫
         └── Models.swift            # PendingData、UsageOutput、ClaudeUsageInfo、P90Result
 
@@ -311,6 +313,30 @@ P90 偵測在以下情況會有大誤差：
 ## Changelog
 
 版本格式：`v主版本.功能版本.修補版本`，遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/) 規範。
+
+---
+
+### v0.7.0 — 2026-06-23
+
+#### Added
+- **agy Quota Bar**：每個 agy 審批卡片顯示即時 quota 用量，含倒數至重置
+  - 新增 `AgyQuotaService.swift`：動態探測 agy local language server port（`ps` + `lsof`），呼叫 `GetUserStatus` gRPC/HTTP API
+  - quota bar 顯示位於 summary 行下方（第二行），寬度 60pt（較前版 1.5x）
+  - 顯示內容：`[████████████░░░░░░░]  88%  ↻ 3h 21m`（remaining fraction + 重置倒數）
+  - 不足 15% 轉紅色，15–30% 轉橘色，其餘為 agy 紫色
+  - `PopoverViewModel.agyQuota` 每 5 分鐘輪詢更新
+- **agy Hook 格式修正**：修正 agy 實際送出的 stdin 格式與假設不符的問題
+  - 正確解析 `input.toolCall.name`（tool 名稱）、`input.toolCall.args`（參數）
+  - `session_id` 改用 `input.conversationId`（同一 conversation 共用同一個 session）
+  - `transcript_path` 改用 `input.transcriptPath`
+  - 指令 key 支援 `CommandLine`（agy PascalCase 格式）除原有 `command` / `cmd`
+  - PascalCase tool 名稱自動正規化（`ListDir` → `list_dir`，`ListPermissions` → `list_permissions`）
+- **CRITICAL 工具改為彈窗審查**：`delete_file` 等 CRITICAL_TOOLS 不再自動拒絕，改以 CRITICAL 風險等級顯示審批 popover，需使用者明確確認
+- **Auto-allow 新增 `list_permissions`**：純讀取工具，不需人工審批
+
+#### Fixed
+- `Bash` / `run_command` summary 支援 `CommandLine` key（agy 格式），修正「(no input)」誤顯示
+- agy shell risk 評估正確取用 `CommandLine` 欄位進行 CRITICAL/HIGH 模式比對
 
 ---
 

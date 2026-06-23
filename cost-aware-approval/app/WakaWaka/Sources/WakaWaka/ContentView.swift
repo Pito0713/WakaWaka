@@ -37,6 +37,7 @@ struct ContentView: View {
                                 isExpanded: model.expandedIndex == idx,
                                 usage:     model.expandedIndex == idx ? model.usage : nil,
                                 isLoading: model.expandedIndex == idx ? model.isLoadingUsage : false,
+                                agyQuota:  model.pendingItems[idx].agent == "agy" ? model.agyQuota : nil,
                                 onToggle:  { model.onToggleExpand(idx) },
                                 onAllow:   { model.onAllow(idx) },
                                 onAlwaysAllow: { model.onAlwaysAllow(idx) },
@@ -82,6 +83,7 @@ private struct QueueItemRow: View {
     let isExpanded: Bool
     let usage:     UsageOutput?
     let isLoading: Bool
+    let agyQuota:  AgyQuota?
     let onToggle:  () -> Void
     let onAllow:   () -> Void
     let onAlwaysAllow: () -> Void
@@ -159,6 +161,36 @@ private struct QueueItemRow: View {
         }
     }
 
+    @ViewBuilder
+    private func agyQuotaSecondaryView(_ quota: AgyQuota) -> some View {
+        let agentColor = Color(red: 0.45, green: 0.25, blue: 0.95)
+        let barColor: Color = quota.remainingFraction < 0.15 ? .red
+                            : quota.remainingFraction < 0.30 ? .orange
+                            : agentColor.opacity(0.75)
+        HStack(spacing: 6) {
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.secondary.opacity(0.18))
+                    .frame(width: 60, height: 4)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(barColor)
+                    .frame(width: max(2, 60 * quota.remainingFraction), height: 4)
+                    .animation(.easeOut(duration: 0.4), value: quota.remainingFraction)
+            }
+            .frame(width: 60, height: 4)
+
+            Text("\(Int(quota.remainingFraction * 100))%")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Text(quota.countdownText(from: now))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .id(now)
+        }
+        .padding(.top, 2)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // ── Collapsed header (always visible) ───────────────────────
@@ -176,7 +208,7 @@ private struct QueueItemRow: View {
                         .fill(riskColor.opacity(0.85))
                         .frame(width: 8, height: 8)
 
-                    // Tool + summary
+                    // Tool + summary + quota bar (agy only)
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 5) {
                             Text(item.tool_name ?? "Tool")
@@ -195,6 +227,9 @@ private struct QueueItemRow: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(isRowHovered && !isExpanded ? 3 : 1)
                                 .animation(.easeInOut(duration: 0.15), value: isRowHovered)
+                        }
+                        if let q = agyQuota, !q.isStale {
+                            agyQuotaSecondaryView(q)
                         }
                     }
 

@@ -20,6 +20,9 @@ final class PopoverViewModel: ObservableObject {
     @Published var claudeUsageInfo: ClaudeUsageInfo? = nil
     @Published var isLoadingClaudeUsage: Bool = false
 
+    /// agy quota from local language server (updated every 5 min)
+    @Published var agyQuota: AgyQuota? = nil
+
     var onAllow:          (Int) -> Void = { _ in }
     var onAlwaysAllow:    (Int) -> Void = { _ in }
     var onDeny:           (Int) -> Void = { _ in }

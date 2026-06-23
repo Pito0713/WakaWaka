@@ -19,6 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sessionStatusTimer: Timer?
     // Server-verified usage via `claude -p "/usage"` (10-minute interval)
     private var usageCommandTimer: Timer?
+    // agy quota (5-minute interval)
+    private var agyQuotaTimer: Timer?
 
     // Notification tracking: avoid re-firing within the same session window
     private var notifiedWindowISO: String?
@@ -39,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startPolling()
         startSessionStatusPolling()
         startUsageCommandPolling()
+        startAgyQuotaPolling()
         startP90Detection()
         requestNotificationPermission()
         startIconAnimation()
@@ -185,6 +188,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         RunLoop.main.add(t, forMode: .common)
         sessionStatusTimer = t
+    }
+
+    // MARK: - agy quota polling (5-minute interval)
+
+    private func startAgyQuotaPolling() {
+        fetchAgyQuota()
+        let t = Timer(timeInterval: 300, repeats: true) { [weak self] _ in self?.fetchAgyQuota() }
+        RunLoop.main.add(t, forMode: .common)
+        agyQuotaTimer = t
+    }
+
+    private func fetchAgyQuota() {
+        AgyQuotaService.shared.fetch { [weak self] quota in
+            DispatchQueue.main.async { self?.viewModel.agyQuota = quota }
+        }
     }
 
     // MARK: - Server-verified usage (`claude -p "/usage"`, 10-minute interval)

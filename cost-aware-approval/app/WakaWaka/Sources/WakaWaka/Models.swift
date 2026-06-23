@@ -127,7 +127,7 @@ struct PendingData: Decodable {
         case "Edit", "MultiEdit", "Write", "Read", "NotebookEdit":
             return raw["file_path"]?.str.map { shortenPath($0) } ?? "(no path)"
         case "Bash":
-            let cmd = raw["command"]?.str ?? "(no command)"
+            let cmd = raw["command"]?.str ?? raw["CommandLine"]?.str ?? "(no command)"
             // 只取第一行，最多 80 字
             let firstLine = cmd.split(separator: "\n").first.map(String.init) ?? cmd
             return firstLine.count > 80 ? String(firstLine.prefix(80)) + "…" : firstLine
@@ -190,7 +190,7 @@ struct PendingData: Decodable {
             ]
 
         case "Bash", "run_command", "run_shell_command":
-            return [.init(kind: .plain, text: raw["command"]?.str ?? raw["cmd"]?.str ?? "(no command)")]
+            return [.init(kind: .plain, text: raw["command"]?.str ?? raw["cmd"]?.str ?? raw["CommandLine"]?.str ?? "(no command)")]
 
         case "WebFetch":
             let url    = raw["url"]?.str ?? "?"
