@@ -219,15 +219,6 @@ async function main() {
     process.exit(0);
   }
 
-  // Debug: log raw input to inspect actual agy hook format
-  try {
-    fs.writeFileSync(
-      path.join(os.homedir(), '.wakawaka', 'agy-hook-debug.json'),
-      JSON.stringify(input, null, 2),
-      { encoding: 'utf8' }
-    );
-  } catch { /* best-effort */ }
-
   // agy actual format: { toolCall: { name, args }, conversationId, transcriptPath, ... }
   // Also support Claude Code style { tool_name, tool_input, session_id } for compat.
   const toolCall = input?.toolCall ?? null;
