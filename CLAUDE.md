@@ -8,20 +8,31 @@
 
 @~/.claude/skills/rules/coding-standards.md
 @~/.claude/skills/rules/security.md
+@~/.claude/skills/rules/git.md
 @~/.claude/skills/engineering/coding-workflow-core.md
 @~/.claude/skills/engineering/gemini-assist.md
+@~/.claude/skills/productivity/handoff.md
+@~/.claude/skills/productivity/version-log.md
 
 ## 按需載入（視任務加入）
 
-# @~/.claude/skills/rules/typescript.md         # TypeScript 專案
-# @~/.claude/skills/rules/python.md             # Python 專案
-# @~/.claude/skills/rules/git.md                # commit / PR 時
-# @~/.claude/skills/engineering/coding-workflow-ref.md   # 查實作模式
-# @~/.claude/skills/learning/feedback-loop.md            # 刻意練習
-# @~/.claude/skills/learning/concrete-example.md         # 邏輯舉例說明
-# @~/.claude/skills/design/wireframing.md                # 頁面規劃
-# @~/.claude/skills/design/ui-visual-design.md           # 視覺風格
-# @~/.claude/skills/design/information-architecture.md   # 導航架構
+## 按需載入項目已列出（預設註解，移除 # 即可啟用）
+
+# @~/.claude/skills/rules/typescript.md
+
+# @~/.claude/skills/rules/python.md
+
+# @~/.claude/skills/engineering/coding-workflow-ref.md
+
+# @~/.claude/skills/learning/feedback-loop.md
+
+# @~/.claude/skills/learning/concrete-example.md
+
+# @~/.claude/skills/design/wireframing.md
+
+# @~/.claude/skills/design/ui-visual-design.md
+
+# @~/.claude/skills/design/information-architecture.md
 
 ---
 
