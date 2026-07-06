@@ -21,6 +21,10 @@ import { spawnSync } from 'node:child_process';
 
 const STATE_DIR      = path.join(os.homedir(), '.wakawaka', 'state');
 const ALLOWLIST_PATH = path.join(os.homedir(), '.wakawaka', 'allowlist.json');
+const SETTINGS_PATH  = process.env.WAKAWAKA_SETTINGS_PATH
+  ?? path.join(os.homedir(), '.wakawaka', 'settings.json');
+const AUTO_AUDIT_PATH = process.env.WAKAWAKA_AUDIT_PATH
+  ?? path.join(os.homedir(), '.wakawaka', 'auto-audit.jsonl');
 const AGENT_NAME     = 'agy';
 
 // ── Timing constants (match pretooluse.mjs) ───────────────────────────────────
@@ -106,6 +110,69 @@ function assessShellRisk(command) {
 
 function shellPrefix(command) {
   return (command ?? '').trim().split(/\s+/)[0] || null;
+}
+
+// ── Auto mode ─────────────────────────────────────────────────────────────────
+// ~/.wakawaka/settings.json → { autoMode: { "agy": { enabled, expiresAt } } }
+// Any missing file, malformed JSON, missing block, or expired window is treated
+// as DISABLED (safe default) — auto mode must be explicitly and validly enabled.
+function loadAutoMode(agent) {
+  try {
+    const settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+    const block = settings?.autoMode?.[agent];
+    if (!block || block.enabled !== true) return false;
+
+    if (block.expiresAt != null) {
+      const expiresAtMs = new Date(block.expiresAt).getTime();
+      if (Number.isNaN(expiresAtMs) || expiresAtMs < Date.now()) return false;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Only shell tools (run_command / run_shell_command) and WRITE_TOOLS may be
+// auto-approved. MCP tools and any other unclassified MEDIUM tool are excluded —
+// they fall through to the normal pending flow so a human decides.
+function isAutoEligible(tool_name) {
+  return tool_name === 'run_command'
+      || tool_name === 'run_shell_command'
+      || WRITE_TOOLS.has(tool_name);
+}
+
+/**
+ * Append one line to the auto-approval audit log.
+ * Returns true on success, false on any failure. The caller MUST NOT auto-approve
+ * when this returns false — the audit trail must not silently break (fail-closed).
+ * The command summary may contain secrets, so the file is created 0o600 / dir 0o700.
+ */
+function appendAutoAudit(agent, tool_name, tool_input) {
+  try {
+    const command = tool_input?.command ?? tool_input?.cmd ?? tool_input?.CommandLine;
+    let summary;
+    if (typeof command === 'string' && command.length > 0) {
+      const firstLine = command.split('\n')[0];
+      summary = firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine;
+    } else {
+      const filePath = tool_input?.file_path ?? tool_input?.path ?? tool_input?.TargetFile;
+      summary = filePath ? `${tool_name} ${filePath}` : String(tool_name ?? 'unknown');
+    }
+
+    const entry = {
+      ts:         new Date().toISOString(),
+      agent,
+      tool_name:  tool_name ?? null,
+      risk_level: 'medium',
+      summary,
+    };
+    fs.mkdirSync(path.dirname(AUTO_AUDIT_PATH), { recursive: true, mode: 0o700 });
+    fs.appendFileSync(AUTO_AUDIT_PATH, JSON.stringify(entry) + '\n', { encoding: 'utf8', mode: 0o600 });
+    return true;
+  } catch {
+    return false; // fail-closed: caller must not auto-approve without an audit record
+  }
 }
 
 // ── Decision output ───────────────────────────────────────────────────────────
@@ -291,6 +358,20 @@ async function main() {
   if (WRITE_TOOLS.has(tool_name)) {
     risk_level = 'medium';
     // Continue to Step 5 (write pending file)
+  }
+
+  // ── Step 4.5: Auto mode — MEDIUM auto-approved when user enabled it ──────
+  // HIGH and CRITICAL never reach this branch — they always fall through to
+  // Step 5 and require an explicit human decision, regardless of auto mode.
+  // Only auto-eligible tools (shell / write-file tools) qualify; MCP and other
+  // unclassified MEDIUM tools fall through to human review.
+  // Fail-closed: if the audit record can't be written, do NOT auto-approve.
+  if (risk_level === 'medium' && isAutoEligible(tool_name) && loadAutoMode(AGENT_NAME)) {
+    if (appendAutoAudit(AGENT_NAME, tool_name, tool_input)) {
+      decide('allow', 'Auto mode: medium auto-approved');
+      process.exit(0);
+    }
+    // audit failed → fall through to Step 5 (write pending, human decides)
   }
 
   // ── Step 5: Write pending file and wait ──────────────────────────────────
