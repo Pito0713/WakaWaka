@@ -44,6 +44,15 @@ const AUTO_ALLOW_TOOLS = new Set([
   'search_files',
   'manage_task',        // in-memory task list, no disk side-effects
   'schedule',           // scheduling only, no execution
+  'search_web',
+  'read_url_content',
+  'define_subagent',
+  'invoke_subagent',
+  'manage_subagents',
+  'send_message',
+  'ask_permission',
+  'ask_question',
+  'generate_image',
 ]);
 
 // ── Safe shell prefixes for run_command (MEDIUM risk) ────────────────────────
@@ -98,6 +107,7 @@ const CRITICAL_TOOLS = new Set(['delete_file']);
 const WRITE_TOOLS = new Set([
   'write_file', 'write_to_file',
   'edit_file', 'replace_file_content',
+  'multi_replace_file_content',
   'create_file',
 ]);
 

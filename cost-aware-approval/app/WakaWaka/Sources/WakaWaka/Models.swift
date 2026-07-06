@@ -124,8 +124,10 @@ struct PendingData: Decodable {
     private static func buildSummary(toolName: String?, raw: [String: JSONValue]?) -> String {
         guard let raw else { return "(no input)" }
         switch toolName {
-        case "Edit", "MultiEdit", "Write", "Read", "NotebookEdit":
-            return raw["file_path"]?.str.map { shortenPath($0) } ?? "(no path)"
+        case "Edit", "MultiEdit", "Write", "Read", "NotebookEdit",
+             "write_to_file", "replace_file_content", "multi_replace_file_content", "view_file":
+            let path = raw["file_path"]?.str ?? raw["TargetFile"]?.str ?? raw["AbsolutePath"]?.str ?? raw["path"]?.str
+            return path.map { shortenPath($0) } ?? "(no path)"
         case "Bash":
             let cmd = raw["command"]?.str ?? raw["CommandLine"]?.str ?? "(no command)"
             // 只取第一行，最多 80 字
@@ -181,8 +183,8 @@ struct PendingData: Decodable {
             return sections
 
         case "Write", "write_to_file", "write_file", "create_file":
-            let file    = raw["file_path"]?.str ?? raw["path"]?.str ?? "?"
-            let content = raw["content"]?.str ?? ""
+            let file    = raw["file_path"]?.str ?? raw["TargetFile"]?.str ?? raw["path"]?.str ?? "?"
+            let content = raw["content"]?.str ?? raw["CodeContent"]?.str ?? ""
             let shown   = full ? content : cap(content, 1000)
             return [
                 .init(kind: .header, text: "📄 \(file)"),
@@ -210,7 +212,7 @@ struct PendingData: Decodable {
             return sections
 
         case "Read", "view_file", "read_file":
-            let filePath = raw["file_path"]?.str ?? raw["path"]?.str ?? "?"
+            let filePath = raw["file_path"]?.str ?? raw["AbsolutePath"]?.str ?? raw["path"]?.str ?? "?"
             var sections: [DiffSection] = [.init(kind: .header, text: "📄 \(filePath)")]
             if let offset = raw["offset"]?.displayString { sections.append(.init(kind: .plain, text: "offset: \(offset)")) }
             if let lim    = raw["limit"]?.displayString  { sections.append(.init(kind: .plain, text: "limit: \(lim)")) }
@@ -224,16 +226,31 @@ struct PendingData: Decodable {
             return sections
 
         case "replace_file_content", "edit_file":
-            let file    = raw["path"]?.str ?? raw["file_path"]?.str ?? "?"
-            let old     = raw["old_content"]?.str ?? raw["old_string"]?.str ?? ""
-            let new     = raw["new_content"]?.str ?? raw["new_string"]?.str ?? ""
+            let file    = raw["path"]?.str ?? raw["TargetFile"]?.str ?? raw["file_path"]?.str ?? "?"
+            let old     = raw["old_content"]?.str ?? raw["old_string"]?.str ?? raw["TargetContent"]?.str ?? ""
+            let new     = raw["new_content"]?.str ?? raw["new_string"]?.str ?? raw["ReplacementContent"]?.str ?? ""
             var sections: [DiffSection] = [.init(kind: .header, text: "📄 \(file)")]
             sections += lineDiff(old: old, new: new, full: full)
             return sections
 
+        case "multi_replace_file_content":
+            let file = raw["TargetFile"]?.str ?? "?"
+            var sections: [DiffSection] = [.init(kind: .header, text: "📄 \(file)")]
+            if case .array(let chunks) = raw["ReplacementChunks"] {
+                for (i, chunk) in chunks.enumerated() {
+                    if case .object(let c) = chunk {
+                        sections.append(.init(kind: .header, text: "── 修改 \(i + 1) ──"))
+                        sections += lineDiff(old: c["TargetContent"]?.str ?? "",
+                                             new: c["ReplacementContent"]?.str ?? "",
+                                             full: full)
+                    }
+                }
+            }
+            return sections
+
         default:
             return raw.sorted { $0.key < $1.key }.map { k, v in
-                let val = v.str.map { cap($0, 300) } ?? "[\(v.displayString)]"
+                let val = v.str.map { full ? $0 : cap($0, 300) } ?? "[\(v.displayString)]"
                 return DiffSection(kind: .plain, text: "[\(k)]\n\(val)")
             }
         }
