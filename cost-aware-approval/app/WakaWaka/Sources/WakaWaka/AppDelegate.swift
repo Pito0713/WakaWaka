@@ -21,6 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var usageCommandTimer: Timer?
     // agy quota (5-minute interval)
     private var agyQuotaTimer: Timer?
+    // Auto-mode expiry sweep (30-second interval)
+    private var autoModeTimer: Timer?
 
     // Notification tracking: avoid re-firing within the same session window
     private var notifiedWindowISO: String?
@@ -42,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startSessionStatusPolling()
         startUsageCommandPolling()
         startAgyQuotaPolling()
+        startAutoModePolling()
         startP90Detection()
         requestNotificationPermission()
         startIconAnimation()
@@ -203,6 +206,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AgyQuotaService.shared.fetch { [weak self] quota in
             DispatchQueue.main.async { self?.viewModel.agyQuota = quota }
         }
+    }
+
+    // MARK: - Auto mode (per-agent, 30-min TTL, persisted to ~/.wakawaka/settings.json)
+
+    private func startAutoModePolling() {
+        viewModel.onToggleAutoMode = { [weak self] agent, enabled in
+            self?.setAutoMode(agent: agent, enabled: enabled)
+        }
+        pollAutoMode() // reconcile any already-expired state before first render
+        let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in self?.pollAutoMode() }
+        RunLoop.main.add(t, forMode: .common)
+        autoModeTimer = t
+    }
+
+    private func setAutoMode(agent: AutoModeAgent, enabled: Bool) {
+        SettingsService.shared.setAutoMode(agent: agent, enabled: enabled)
+        viewModel.applyAutoMode(from: SettingsService.shared.load())
+    }
+
+    /// Reverts any agent whose 30-minute auto-mode window has elapsed (so the
+    /// hook stops honoring it), then mirrors the resulting settings into the
+    /// view model so the toggle UI always reflects what's actually on disk.
+    private func pollAutoMode() {
+        let settings = SettingsService.shared.load()
+        if settings.autoMode.claudeCode.isExpired { SettingsService.shared.setAutoMode(agent: .claudeCode, enabled: false) }
+        if settings.autoMode.agy.isExpired        { SettingsService.shared.setAutoMode(agent: .agy, enabled: false) }
+        viewModel.applyAutoMode(from: SettingsService.shared.load())
     }
 
     // MARK: - Server-verified usage (`claude -p "/usage"`, 10-minute interval)
@@ -596,9 +626,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Animate height change
         // session status bar: divider(1) + label(20) + bar(18) + burn+cost row(18) + padding(18) = ~82
         let sessionH: CGFloat = 82
+        // auto-mode bar: divider(1) + row(~17) + vertical padding(16) = ~34
+        let autoModeH: CGFloat = 34
         let targetH: CGFloat = pendingQueue.isEmpty
-            ? 100 + sessionH
-            : min(CGFloat(100 + pendingQueue.count * 52) + (viewModel.expandedIndex != nil ? 340 : 0) + sessionH, 600)
+            ? 100 + autoModeH + sessionH
+            : min(CGFloat(100 + pendingQueue.count * 52) + (viewModel.expandedIndex != nil ? 340 : 0) + autoModeH + sessionH, 600)
 
         if abs(popover.contentSize.height - targetH) > 1 {
             NSAnimationContext.runAnimationGroup { ctx in

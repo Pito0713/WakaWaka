@@ -23,6 +23,12 @@ final class PopoverViewModel: ObservableObject {
     /// agy quota from local language server (updated every 5 min)
     @Published var agyQuota: AgyQuota? = nil
 
+    /// Per-agent "auto mode" toggle state, mirrored from ~/.wakawaka/settings.json.
+    /// AppDelegate owns the SettingsService round-trip (including the 30-min
+    /// expiry sweep); this is just the UI's read-only reflection of it.
+    @Published var claudeCodeAutoMode: AgentAutoMode = .disabled
+    @Published var agyAutoMode:        AgentAutoMode = .disabled
+
     var onAllow:          (Int) -> Void = { _ in }
     var onAlwaysAllow:    (Int) -> Void = { _ in }
     var onDeny:           (Int) -> Void = { _ in }
@@ -31,4 +37,12 @@ final class PopoverViewModel: ObservableObject {
     var onDismiss:        (Int) -> Void = { _ in }
     /// Manually trigger an immediate session-status refresh (re-parses JSONL now)
     var onRefreshSession: () -> Void = {}
+    /// User flipped an auto-mode toggle in the UI (keyed by agent, not queue index).
+    var onToggleAutoMode: (AutoModeAgent, Bool) -> Void = { _, _ in }
+
+    /// Mirrors a freshly-loaded settings snapshot into the published UI state.
+    func applyAutoMode(from settings: WakaWakaSettings) {
+        claudeCodeAutoMode = settings.autoMode.claudeCode
+        agyAutoMode = settings.autoMode.agy
+    }
 }

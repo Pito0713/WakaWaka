@@ -52,6 +52,13 @@ struct ContentView: View {
                 }
             }
 
+            // ── Always-visible per-agent auto-mode toggles ─────────────────
+            AutoModeBar(
+                claudeCodeState: model.claudeCodeAutoMode,
+                agyState: model.agyAutoMode,
+                onToggle: { agent, enabled in model.onToggleAutoMode(agent, enabled) }
+            )
+
             // ── Always-visible session status ────────────────────────────
             SessionStatusView(
                 usage: model.sessionStatus,
@@ -519,6 +526,70 @@ private struct QueueItemRow: View {
         case .medium:   return "MEDIUM"
         case .low:      return "LOW"
         }
+    }
+}
+
+// MARK: - Auto-mode bar (per-agent 30-min auto-approve toggle)
+
+/// Always-visible row of per-agent auto-mode toggles. Flipping a toggle writes
+/// ~/.wakawaka/settings.json (via AppDelegate → SettingsService) for the
+/// PreToolUse hook to read; this view only renders whatever state it's given.
+private struct AutoModeBar: View {
+    let claudeCodeState: AgentAutoMode
+    let agyState: AgentAutoMode
+    let onToggle: (AutoModeAgent, Bool) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider()
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                HStack(spacing: 16) {
+                    Text("Auto 模式")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    agentToggle(label: "Claude", agent: .claudeCode, state: claudeCodeState, now: context.date)
+                    agentToggle(label: "agy",    agent: .agy,        state: agyState,        now: context.date)
+                    Spacer()
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+        }
+    }
+
+    @ViewBuilder
+    private func agentToggle(label: String, agent: AutoModeAgent, state: AgentAutoMode, now: Date) -> some View {
+        HStack(spacing: 5) {
+            Toggle(isOn: Binding(
+                get: { state.enabled },
+                set: { onToggle(agent, $0) }
+            )) {
+                EmptyView()
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .labelsHidden()
+
+            Text(label).font(.caption)
+
+            if let remaining = remainingText(state: state, now: now) {
+                Text(remaining)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// "Auto ↻ 27m" while the window is live; nil once disabled or expired
+    /// (expiry itself is reconciled by AppDelegate's 30s sweep, not here).
+    private func remainingText(state: AgentAutoMode, now: Date) -> String? {
+        guard state.enabled, let expiresAtStr = state.expiresAt,
+              let expiry = SettingsService.parseExpiry(expiresAtStr)
+        else { return nil }
+        let remaining = expiry.timeIntervalSince(now)
+        guard remaining > 0 else { return nil }
+        let minutes = Int(remaining) / 60
+        return "Auto ↻ \(minutes)m"
     }
 }
 

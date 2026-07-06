@@ -316,6 +316,20 @@ P90 偵測在以下情況會有大誤差：
 
 ---
 
+### v0.8.0 — 2026-07-06
+
+#### Added
+
+- **Auto 模式（per-agent 自動放行）**：menubar 新增每個 agent 獨立的 auto 開關，開啟後該 agent 的 MEDIUM 風險操作自動放行、跳過人工審批
+  - 白名單限縮：僅 `Edit` / `Write` / `MultiEdit` + 未知 bash（Claude Code）、shell 工具 + write 工具（agy）自動放行；MCP 與未分類工具即使 auto 開啟仍走人工審批
+  - HIGH（`sudo`、`git push --force`、`kill`…）與 CRITICAL 永不被 auto 放行，硬編碼不可繞過
+  - 30 分鐘 TTL：開啟後自動過期，menubar 顯示倒數（`Auto ↻ 27m`），到期由 30 秒 sweep 自動歸位
+  - fail-closed 稽核：每筆自動放行寫入 `~/.wakawaka/auto-audit.jsonl`（`0o600`）；稽核寫入失敗則不放行、退回人工審批
+  - 新增 `~/.wakawaka/settings.json`（`0o600`，atomic write）作為 app 與 hook 的共用契約
+  - 新增 `SettingsService.swift`（app 端讀寫）；hook 端 `loadAutoMode()` 讀取設定，壞檔 / 過期一律視為停用（安全預設）
+
+---
+
 ### v0.7.0 — 2026-06-23
 
 #### Added
