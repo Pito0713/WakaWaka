@@ -18,6 +18,7 @@ WakaWaka 透過 **PreToolUse hook** 機制攔截每一個工具呼叫（支援 C
 | 功能                 | 說明                                                                                                     |
 | -------------------- | -------------------------------------------------------------------------------------------------------- |
 | **三層風險分類**     | CRITICAL（彈窗，需明確確認）→ HIGH（強制彈窗）→ MEDIUM（可設定 allowlist）                               |
+| **Auto 模式**        | per-agent 開關；開啟後自動放行白名單 MEDIUM（Edit/Write/MultiEdit + 未知 bash），HIGH/CRITICAL 與 MCP 仍彈窗；30 分鐘 TTL + fail-closed 稽核（`~/.wakawaka/auto-audit.jsonl`） |
 | **多代理支援**       | 同時守護 Claude Code（`pretooluse.mjs`）與 agy（`pretooluse-agy.mjs`），agent badge 顯示來源             |
 | **agy Quota Bar**    | 每個 agy 審批卡片即時顯示 Gemini quota 用量（%）與重置倒數（↻ Xh Xm），從 agy local language server 取得 |
 | **Token 用量追蹤**   | 從 `~/.claude/projects/` JSONL 解析，全域合併去重，誤差 < 3%                                             |
