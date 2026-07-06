@@ -69,19 +69,25 @@ except Exception:
 
 pre = cfg.setdefault("hooks", {}).setdefault("PreToolUse", [])
 
-for entry in pre:
-    for h in entry.get("hooks", []):
-        if h.get("command") == hook_cmd:
-            print("skip")
-            sys.exit(0)
+# Drop any prior WakaWaka registration (matched by the hook SCRIPT path, not the
+# full command) so a changed node binary path can't leave a stale duplicate
+# entry. Two blocking hooks would race on the same decision file and starve one
+# another into a timeout-deny.
+def is_wakawaka(entry):
+    return any("pretooluse.mjs" in h.get("command", "") for h in entry.get("hooks", []))
 
+already = any(
+    h.get("command") == hook_cmd
+    for entry in pre for h in entry.get("hooks", [])
+)
+pre[:] = [entry for entry in pre if not is_wakawaka(entry)]
 pre.append({"matcher": "*", "hooks": [{"type": "command", "command": hook_cmd}]})
 
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
     f.write("\n")
 
-print("done")
+print("skip" if already else "done")
 PYEOF
 )
 
