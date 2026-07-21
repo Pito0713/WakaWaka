@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let isoFormatter = ISO8601DateFormatter()
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        SkinManager.shared.reload()   // pick up any user skin before first render
         setupStatusItem()
         setupPopover()
         startPolling()
@@ -47,16 +48,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startAutoModePolling()
         startP90Detection()
         requestNotificationPermission()
-        startIconAnimation()
+        updateIconAnimationSpeed(hasPending: false)
     }
 
     // MARK: - Setup
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        setIcon(hasPending: false)
+        // Set the invariant button properties ONCE — re-setting them every animation
+        // tick forces needless redraws that can flicker.
+        statusItem.button?.title = ""
+        statusItem.button?.contentTintColor = nil
+        statusItem.button?.imageScaling = .scaleNone
+        // Force layer-backing so the CATransaction(setDisableActions) in setIcon
+        // actually suppresses the implicit image cross-fade — without a layer that
+        // transaction is a no-op and each frame swap can flash during recompositing.
+        statusItem.button?.wantsLayer = true
+        statusItem.button?.layer?.actions = ["contents": NSNull(), "onOrderIn": NSNull(), "onOrderOut": NSNull(), "sublayers": NSNull(), "opacity": NSNull()]
+        // Render the icon in a CALayer we own instead of `button.image`. Swapping
+        // `button.image` each frame goes through NSButton's image-compositing path,
+        // which recomposites the whole status item and can flash white on some Macs.
+        // A sublayer swaps its `contents` directly on the render server — instant,
+        // no implicit cross-fade, off the button-image path entirely.
+        let l = CALayer()
+        // .resizeAspect makes the drawn size follow the layer's bounds (not
+        // contentsScale), so the icon can't blow up to raw pixel size if
+        // backingScaleFactor is momentarily 1 before the window attaches.
+        l.contentsGravity = .resizeAspect
+        l.contentsScale = statusItem.button?.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        l.actions = ["contents": NSNull(), "opacity": NSNull(), "bounds": NSNull(), "position": NSNull(), "frame": NSNull()]
+        statusItem.button?.layer?.addSublayer(l)
+        iconLayer = l
+        // Overlay lives on top of the icon art.
+        urgencyOverlay = IconUrgencyOverlay(host: l)
         statusItem.button?.action = #selector(togglePopover)
         statusItem.button?.target = self
+        setIcon(hasPending: false)
     }
 
     private func setupPopover() {
@@ -79,94 +106,247 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if #available(macOS 13.0, *) { hc.sizingOptions = [] }
         popover.contentViewController = hc
         popover.contentSize = NSSize(width: 480, height: 100)
+
+        // Warm up the hosting view so the first popover show paints content
+        // immediately instead of flashing an empty white frame.
+        hc.view.wantsLayer = true
+        hc.view.layoutSubtreeIfNeeded()
     }
 
     private func setIcon(hasPending: Bool) {
-        guard let button = statusItem.button else { return }
-        button.image = makeGhostIcon(hasPending: hasPending)
-        button.contentTintColor = nil
-        button.title = ""
+        guard let button = statusItem.button, let iconLayer else { return }
+        // A user skin (external PNG frames) wins if active; otherwise the built-in
+        // procedural ghost. The pose is fully determined by `idleAction` (the eye
+        // direction) which the animation loop drives.
+        let skinImage = SkinManager.shared.image(wave: animFrame, action: idleAction.skinName, pending: hasPending)
+        let image: NSImage = skinImage ?? makeGhostIcon(hasPending: hasPending, tint: ghostForeground())
+
+        // Keep the status item exactly icon-wide — we no longer set `button.image`,
+        // so `variableLength` has nothing to size from; drive the width ourselves.
+        let iconSize = image.size                       // points, e.g. 18×18
+        let width = iconSize.width.rounded() + 4        // a little breathing room
+        if abs(width - lastLength) > 0.5 { statusItem.length = width; lastLength = width }
+
+        let scale = button.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        // Center an icon-sized layer inside the button (bounds ≈ status-item width ×
+        // menu-bar height). .resizeAspect then fits the frame 1:1 for our square art.
+        let b = button.bounds
+        let originX = ((b.width  - iconSize.width)  / 2).rounded()
+        let originY = ((b.height - iconSize.height) / 2).rounded()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)   // instant swap, never a cross-fade
+        iconLayer.contentsScale = scale
+        iconLayer.frame = CGRect(x: originX, y: originY, width: iconSize.width, height: iconSize.height)
+        // SkinManager returns the *same* cached NSImage for an unchanged frame, so a
+        // held pose never re-decodes/re-sets the layer contents.
+        if image !== lastIconImage {
+            iconLayer.contents = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            lastIconImage = image
+        }
+        iconLayer.opacity = 1
+        CATransaction.commit()
+
+        // Urgency escalation is parked pending a fresh spec — the overlay stays
+        // dormant (opacity 0), so pending shows the plain red scanning ghost.
+    }
+
+    /// Menu-bar foreground colour for the built-in (no-skin) ghost. The template
+    /// auto-tint that a template NSImage gives us does NOT apply to raw CALayer
+    /// contents, so we tint the ghost ourselves: white on a dark menu bar, black
+    /// on a light one.
+    private func ghostForeground() -> NSColor {
+        let match = statusItem.button?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
+        return match == .darkAqua ? .white : .black
     }
 
     // MARK: - Pixel ghost animation
 
     /// Ghost pixel maps: 0 = transparent, 1 = body (auto dark/light), 2 = eye (transparent cutout)
     /// Two frames alternate the bottom wave → classic Pac-Man ghost float
-    private static let ghostFrames: [[[Int]]] = [
-        [   // Frame 0 — wave A
-            [0,0,1,1,1,1,1,0,0],
-            [0,1,1,1,1,1,1,1,0],
-            [1,1,1,1,1,1,1,1,1],
-            [1,2,2,1,1,1,2,2,1],   // eyes
-            [1,2,2,1,1,1,2,2,1],   // eyes
-            [1,1,1,1,1,1,1,1,1],
-            [1,1,1,1,1,1,1,1,1],
-            [1,1,1,1,1,1,1,1,1],
-            [1,1,0,1,1,0,1,1,0],   // bottom wave A
-            [1,0,0,1,0,0,1,0,0],
-        ],
-        [   // Frame 1 — wave B (shifted one pixel right)
-            [0,0,1,1,1,1,1,0,0],
-            [0,1,1,1,1,1,1,1,0],
-            [1,1,1,1,1,1,1,1,1],
-            [1,2,2,1,1,1,2,2,1],
-            [1,2,2,1,1,1,2,2,1],
-            [1,1,1,1,1,1,1,1,1],
-            [1,1,1,1,1,1,1,1,1],
-            [1,1,1,1,1,1,1,1,1],
-            [1,0,1,1,0,1,1,0,1],   // bottom wave B
-            [0,0,1,0,0,1,0,0,1],
-        ],
-    ]
+    private enum IdleAction {
+        case normal, blink, lookLeft, lookUp, lookDown   // normal = looking right (idle pose)
 
-    private func startIconAnimation() {
-        let t = Timer(timeInterval: 0.35, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.animFrame = (self.animFrame + 1) % 2
-            self.setIcon(hasPending: !self.pendingQueue.isEmpty)
+        /// Stable identifier used to pick a skin frame file.
+        var skinName: String {
+            switch self {
+            case .normal:    return "normal"
+            case .blink:     return "blink"
+            case .lookLeft:  return "lookLeft"
+            case .lookUp:    return "lookUp"
+            case .lookDown:  return "lookDown"
+            }
         }
-        RunLoop.main.add(t, forMode: .common)
-        iconTimer = t
+    }
+    private var idleAction: IdleAction = .normal
+    private var idleActionTicks: Int = 0        // remaining ticks to hold a transient pose (blink)
+    private var scanTick: Int = 0               // drives the pending eye-scan cycle
+    private weak var lastIconImage: NSImage?   // skip redundant status-button updates
+    private var iconLayer: CALayer?            // hosts the icon; swapped via `contents` (off the button.image path)
+    private var lastLength: CGFloat = -1        // last status-item width we set
+
+    // Data-reactive icon overlay (sublayer of iconLayer). Parked/dormant until the
+    // urgent state gets a fresh spec — kept wired so it's a one-line re-enable.
+    private var urgencyOverlay: IconUrgencyOverlay?
+
+    // Feet-wave frame swap. Swaps via `iconLayer.contents` (not `button.image`), so
+    // it no longer hits the recompositing path that used to flash white.
+    private let waveEnabled = true
+    // Feet glide as a seamless conveyor: the skirt notches shift 1px per phase and
+    // repeat every `feetPhaseCount` frames (idle_0…idle_4), so cycling looks like a
+    // smooth continuous slide rather than a two-frame flip.
+    private let feetPhaseCount = 5
+
+    // Classic retro ghost — hand-drawn 9×10 pixel map (user's design + a rounded
+    // top row). Chunky on purpose. 0 = empty, 1 = body, 2 = cut-out (eye/mouth).
+    private static let ghostCols = 9
+    private static let ghostRows = 10
+
+    private func getGhostPixels(wave: Int, action: IdleAction, frightened: Bool = false) -> [[Int]] {
+        var base = [
+            [0,0,1,1,1,1,1,0,0],   // rounded top
+            [0,1,1,1,1,1,1,1,0],
+            [1,1,1,1,1,1,1,1,1],
+            [1,1,1,1,1,1,1,1,1],
+            [1,1,1,1,1,1,1,1,1],
+            [1,1,1,1,1,1,1,1,1],
+            [1,1,1,1,1,1,1,1,1],
+            [1,1,1,1,1,1,1,1,1],
+            [1,1,1,1,1,1,1,1,1],
+            [1,1,1,1,1,1,1,1,1],
+        ]
+
+        // Feet wave — two alternating frames.
+        if wave == 0 {
+            base[8] = [1,1,0,1,1,0,1,1,0]
+            base[9] = [1,0,0,1,0,0,1,0,0]
+        } else {
+            base[8] = [1,0,1,1,0,1,1,0,1]
+            base[9] = [0,0,1,0,0,1,0,0,1]
+        }
+
+        // Pending: frightened face — small eyes + a small wavy mouth, outer columns
+        // kept solid so the silhouette never fragments at this coarse size.
+        if frightened {
+            base[3] = [1,1,2,1,1,1,2,1,1]
+            base[4] = [1,1,2,1,1,1,2,1,1]
+            base[6] = [1,1,2,1,2,1,2,1,1]
+            return base
+        }
+
+        // Normal (= looking right) + idle expressions.
+        switch action {
+        case .normal:                              // idle: pupils to the right
+            base[3] = [1,1,2,2,1,1,1,2,2]
+            base[4] = [1,1,2,2,1,1,1,2,2]
+        case .lookLeft:
+            base[3] = [2,2,1,1,1,2,2,1,1]
+            base[4] = [2,2,1,1,1,2,2,1,1]
+        case .lookUp:                              // eyes higher
+            base[2] = [1,2,2,1,1,1,2,2,1]
+            base[3] = [1,2,2,1,1,1,2,2,1]
+        case .lookDown:                            // eyes lower
+            base[4] = [1,2,2,1,1,1,2,2,1]
+            base[5] = [1,2,2,1,1,1,2,2,1]
+        case .blink:                               // eyes as a thin closed line
+            base[4] = [1,2,2,1,1,1,2,2,1]
+        }
+        return base
     }
 
-    private func makeGhostIcon(hasPending: Bool) -> NSImage {
-        let px: CGFloat  = 1.53        // each ghost pixel (~25% smaller than original 2pt)
-        let cols         = 9
-        let rows         = 10
-        let canvasW      = CGFloat(cols) * px  // 18 pt
-        let canvasH: CGFloat = 22
-        let offsetY      = (canvasH - CGFloat(rows) * px) / 2  // vertical centre = 1 pt
-        let pixels       = Self.ghostFrames[animFrame]
-        let canvas       = NSSize(width: canvasW, height: canvasH)
+    private var currentAnimSpeed: TimeInterval = 0.0
 
-        let img = NSImage(size: canvas, flipped: false) { [weak self] rect in
-            guard let self else { return true }
+    private func updateIconAnimationSpeed(hasPending: Bool) {
+        let newSpeed: TimeInterval = hasPending ? 0.25 : 0.5
+        if newSpeed != currentAnimSpeed || iconTimer == nil {
+            iconTimer?.invalidate()
+            currentAnimSpeed = newSpeed
+            let t = Timer(timeInterval: newSpeed, repeats: true) { [weak self] _ in
+                guard let self else { return }
 
-            // Body colour adapts to current appearance
-            let isDark = NSApp.effectiveAppearance
-                .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let bodyColor: NSColor = isDark ? .white : .black
+                let currentPending = !self.pendingQueue.isEmpty
 
-            for row in 0..<rows {
-                for col in 0..<cols {
-                    guard pixels[row][col] == 1 else { continue }
-                    let x = CGFloat(col) * px
-                    let y = offsetY + CGFloat(rows - 1 - row) * px  // row 0 = top
-                    bodyColor.setFill()
-                    NSBezierPath(rect: NSRect(x: x, y: y, width: px, height: px)).fill()
+                // Reduce Motion: hold a still ghost looking right — no wave, no scan.
+                if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                    self.animFrame = 0
+                    self.idleAction = .normal
+                    self.idleActionTicks = 0
+                    self.setIcon(hasPending: currentPending)
+                    if currentPending != hasPending {
+                        self.updateIconAnimationSpeed(hasPending: currentPending)
+                    }
+                    return
+                }
+
+                // Feet glide one step every tick (seamless conveyor over 5 phases).
+                if self.waveEnabled { self.animFrame = (self.animFrame + 1) % self.feetPhaseCount }
+
+                if currentPending {
+                    // Eyes scan a continuous loop: right → left → up → down.
+                    self.idleActionTicks = 0
+                    self.scanTick += 1
+                    let scan: [IdleAction] = [.normal, .lookLeft, .lookUp, .lookDown]
+                    let ticksPerDirection = 4    // ~1.0s each at the pending cadence
+                    self.idleAction = scan[(self.scanTick / ticksPerDirection) % scan.count]
+                } else {
+                    // Idle: look right, blink occasionally.
+                    self.scanTick = 0
+                    if self.idleActionTicks > 0 {
+                        self.idleActionTicks -= 1
+                        if self.idleActionTicks == 0 { self.idleAction = .normal }
+                    } else if Int.random(in: 0..<100) < 6 {
+                        self.idleAction = .blink
+                        self.idleActionTicks = 1
+                    } else {
+                        self.idleAction = .normal
+                    }
+                }
+
+                self.setIcon(hasPending: currentPending)
+                if currentPending != hasPending {
+                    self.updateIconAnimationSpeed(hasPending: currentPending)
                 }
             }
+            RunLoop.main.add(t, forMode: .common)
+            iconTimer = t
+        }
+    }
 
-            // Pending dot: orange circle, top-right, pulses with frame
-            if hasPending {
-                let alpha: CGFloat = self.animFrame == 0 ? 1.0 : 0.5
-                NSColor.systemOrange.withAlphaComponent(alpha).setFill()
-                let r: CGFloat = 4
-                NSBezierPath(ovalIn: NSRect(
-                    x: rect.width  - r - 0.5,
-                    y: rect.height - r - 0.5,
-                    width: r, height: r
-                )).fill()
+    private func makeGhostIcon(hasPending: Bool, tint: NSColor) -> NSImage {
+        // Uniform 13.5×15 pt (px 1.5). To stay crisp on a 1x (non-Retina) screen —
+        // where 1.5-pt cells would otherwise straddle half a device pixel and blur —
+        // every cell edge is snapped to the *actual* device-pixel grid at draw time
+        // (see `snap`). On Retina (2x) the 1.5-pt cells already align, so snapping is
+        // a no-op and the even chunky look is preserved; on 1x the cells snap to whole
+        // pixels (slightly uneven, but sharp instead of fuzzy).
+        let screenScale = statusItem.button?.window?.backingScaleFactor
+                        ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let px: CGFloat  = 1.5
+        let cols         = Self.ghostCols   // 9
+        let rows         = Self.ghostRows   // 10
+        let canvasW      = CGFloat(cols) * px  // 13.5 pt
+        let canvasH: CGFloat = 22
+        let offsetY      = (canvasH - CGFloat(rows) * px) / 2
+        let pixels       = getGhostPixels(wave: animFrame, action: idleAction, frightened: hasPending)
+        let canvas       = NSSize(width: canvasW, height: canvasH)
+
+        // Tinted directly (not a template image): the caller passes the menu-bar
+        // foreground colour, because raw CALayer contents don't get the system's
+        // template auto-tint. Pending state is signalled purely by the frightened
+        // face (and the faster wave animation).
+        let img = NSImage(size: canvas, flipped: false) { _ in
+            let ctx = NSGraphicsContext.current?.cgContext
+            ctx?.setShouldAntialias(false)                      // hard pixel edges
+            let s = max(abs(ctx?.ctm.a ?? screenScale), 1)      // real device scale
+            func snap(_ v: CGFloat) -> CGFloat { (v * s).rounded() / s }
+            tint.setFill()
+            for row in 0..<rows {
+                for col in 0..<cols where pixels[row][col] == 1 {
+                    let x0 = snap(CGFloat(col) * px)
+                    let x1 = snap(CGFloat(col + 1) * px)
+                    let y0 = snap(offsetY + CGFloat(rows - 1 - row) * px)  // row 0 = top
+                    let y1 = snap(offsetY + CGFloat(rows - row) * px)
+                    NSBezierPath(rect: NSRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)).fill()
+                }
             }
             return true
         }
@@ -614,6 +794,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem.button else { return }
         if !popover.isShown {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            // NSHostingController inside an NSPopover can come up blank on first show
+            // (SwiftUI isn't asked to draw until an interaction/resize). Force a
+            // layout + display pass so content paints immediately.
+            if let v = popover.contentViewController?.view {
+                v.needsLayout = true
+                v.needsDisplay = true
+                v.layoutSubtreeIfNeeded()
+                v.displayIfNeeded()
+            }
         }
         // Do NOT activate the app — popover floats without stealing keyboard focus
     }
@@ -633,9 +822,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             : min(CGFloat(100 + pendingQueue.count * 52) + (viewModel.expandedIndex != nil ? 340 : 0) + autoModeH + sessionH, 600)
 
         if abs(popover.contentSize.height - targetH) > 1 {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.22
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            if popover.isShown {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.22
+                    ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    popover.contentSize = NSSize(width: 480, height: targetH)
+                }
+            } else {
+                // First show: size up front (no animation) so it opens with content
+                // already laid out at the right size instead of a blank frame.
                 popover.contentSize = NSSize(width: 480, height: targetH)
             }
         }
