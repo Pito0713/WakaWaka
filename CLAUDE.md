@@ -38,10 +38,10 @@
 ## 制度層路由（governance，用到才讀，不要 @ 常駐）
 
 > 情境命中時再讀對應檔案，讀完就動手：
-> - 要委派 subagent / 選 model → ~/.claude/skills/governance/model-orchestration.md
-> - 判斷完成了沒 / 該不該升級 / 該不該問人 → ~/.claude/skills/governance/judgment-rubrics.md
-> - 要寫派工 prompt → ~/.claude/skills/governance/delegation-templates.md
-> - 踩坑教訓查詢與 append → ~/.claude/skills/governance/lessons.md
+> - 要委派 subagent / 選 model → ~/.claude/governance/model-orchestration.md
+> - 判斷完成了沒 / 該不該升級 / 該不該問人 → ~/.claude/governance/judgment-rubrics.md
+> - 要寫派工 prompt → ~/.claude/governance/delegation-templates.md
+> - 踩坑教訓查詢與 append → ~/.claude/governance/lessons.md
 ---
 
 ## 溝通規範
