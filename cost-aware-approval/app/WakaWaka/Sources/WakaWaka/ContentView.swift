@@ -56,6 +56,7 @@ struct ContentView: View {
             AutoModeBar(
                 claudeCodeState: model.claudeCodeAutoMode,
                 agyState: model.agyAutoMode,
+                codexState: model.codexAutoMode,
                 onToggle: { agent, enabled in model.onToggleAutoMode(agent, enabled) }
             )
 
@@ -64,6 +65,8 @@ struct ContentView: View {
                 usage: model.sessionStatus,
                 isLoading: model.isLoadingSession,
                 claudeUsage: model.claudeUsageInfo,
+                codexUsage: model.codexUsageState,
+                isLoadingCodex: model.isLoadingCodexUsage,
                 onRefresh: { model.onRefreshSession() }
             )
         }
@@ -162,12 +165,14 @@ private struct QueueItemRow: View {
     private var agentInfo: (label: String, color: Color) {
         switch item.agent {
         case "agy":
-            return ("agy", Color(red: 0.45, green: 0.25, blue: 0.95))
+            return (item.agentDisplayLabel, Color(red: 0.45, green: 0.25, blue: 0.95))
+        case "codex":
+            return (item.agentDisplayLabel, Color(red: 0.10, green: 0.55, blue: 0.45))
         case "claude-code", .none:
             // nil means Claude Code (pre-multi-agent pending files)
-            return ("Claude", Color(red: 0.87, green: 0.38, blue: 0.18))
+            return (item.agentDisplayLabel, Color(red: 0.87, green: 0.38, blue: 0.18))
         default:
-            return (item.agent ?? "?", .secondary)
+            return (item.agentDisplayLabel, .secondary)
         }
     }
 
@@ -390,6 +395,20 @@ private struct QueueItemRow: View {
                     }
                     .buttonStyle(.bordered)
                 }
+            } else if !item.canBeAllowed {
+                HStack(spacing: 8) {
+                    Image(systemName: "hand.raised.slash.fill")
+                        .foregroundStyle(.red)
+                    Text("此操作已由政策拒絕")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(action: onDeny) {
+                        Label("Deny", systemImage: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                }
             } else if canAlwaysAllow {
                 HStack(spacing: 8) {
                     denyBtn
@@ -540,6 +559,7 @@ private struct QueueItemRow: View {
 private struct AutoModeBar: View {
     let claudeCodeState: AgentAutoMode
     let agyState: AgentAutoMode
+    let codexState: AgentAutoMode
     let onToggle: (AutoModeAgent, Bool) -> Void
 
     var body: some View {
@@ -552,6 +572,7 @@ private struct AutoModeBar: View {
                         .foregroundStyle(.secondary)
                     agentToggle(label: "Claude", agent: .claudeCode, state: claudeCodeState, now: context.date)
                     agentToggle(label: "agy",    agent: .agy,        state: agyState,        now: context.date)
+                    agentToggle(label: "Codex",  agent: .codex,      state: codexState,      now: context.date)
                     Spacer()
                 }
             }

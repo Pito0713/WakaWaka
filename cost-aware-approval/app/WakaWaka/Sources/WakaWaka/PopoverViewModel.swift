@@ -19,6 +19,9 @@ final class PopoverViewModel: ObservableObject {
     /// Server-verified usage from `claude -p "/usage"` (updated every 10 min + on manual refresh)
     @Published var claudeUsageInfo: ClaudeUsageInfo? = nil
     @Published var isLoadingClaudeUsage: Bool = false
+    /// Account quota snapshot from the newest local Codex token_count event.
+    @Published var codexUsageState: CodexUsageState = .unavailable
+    @Published var isLoadingCodexUsage: Bool = false
 
     /// agy quota from local language server (updated every 5 min)
     @Published var agyQuota: AgyQuota? = nil
@@ -28,6 +31,7 @@ final class PopoverViewModel: ObservableObject {
     /// expiry sweep); this is just the UI's read-only reflection of it.
     @Published var claudeCodeAutoMode: AgentAutoMode = .disabled
     @Published var agyAutoMode:        AgentAutoMode = .disabled
+    @Published var codexAutoMode:      AgentAutoMode = .disabled
 
     var onAllow:          (Int) -> Void = { _ in }
     var onAlwaysAllow:    (Int) -> Void = { _ in }
@@ -44,5 +48,6 @@ final class PopoverViewModel: ObservableObject {
     func applyAutoMode(from settings: WakaWakaSettings) {
         claudeCodeAutoMode = settings.autoMode.claudeCode
         agyAutoMode = settings.autoMode.agy
+        codexAutoMode = settings.autoMode.codex
     }
 }

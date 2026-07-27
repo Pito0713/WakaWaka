@@ -64,10 +64,16 @@ enum RiskLevel: String, Decodable {
     case critical, high, medium, low
 }
 
+enum ApprovalEnforcement: String, Decodable {
+    case review, deny
+}
+
 struct PendingData: Decodable {
     let session_id: String?
     let tool_name: String?
     let risk_level: RiskLevel?   // nil → medium (non-Bash tools)
+    /// Missing in older pending files; nil preserves the legacy review flow.
+    let enforcement: ApprovalEnforcement?
     let transcript_path: String?
     let timestamp: String?
 
@@ -90,11 +96,23 @@ struct PendingData: Decodable {
     /// True when this item is a tombstone (hook already gone; tool was NOT executed).
     var isExpired: Bool { hookExited == true }
 
-    /// Originating agent: "agy", "claude-code", or nil (treated as Claude Code).
+    /// Originating agent: "agy", "codex", "claude-code", or nil (treated as Claude Code).
     let agent: String?
 
+    var isPolicyDenied: Bool { enforcement == .deny }
+    var canBeAllowed: Bool { !isExpired && !isPolicyDenied }
+
+    var agentDisplayLabel: String {
+        switch agent {
+        case "agy": return "agy"
+        case "codex": return "Codex"
+        case "claude-code", .none: return "Claude"
+        default: return agent ?? "?"
+        }
+    }
+
     enum CodingKeys: String, CodingKey {
-        case session_id, tool_name, risk_level, transcript_path, timestamp, tool_input
+        case session_id, tool_name, risk_level, enforcement, transcript_path, timestamp, tool_input
         case hookExited, hookExitedAt
         case hookUrgent
         case agent
@@ -105,6 +123,7 @@ struct PendingData: Decodable {
         session_id      = try c.decodeIfPresent(String.self,    forKey: .session_id)
         tool_name       = try c.decodeIfPresent(String.self,    forKey: .tool_name)
         risk_level      = try c.decodeIfPresent(RiskLevel.self, forKey: .risk_level)
+        enforcement     = try c.decodeIfPresent(ApprovalEnforcement.self, forKey: .enforcement)
         transcript_path = try c.decodeIfPresent(String.self,    forKey: .transcript_path)
         timestamp       = try c.decodeIfPresent(String.self,    forKey: .timestamp)
         hookExited      = try c.decodeIfPresent(Bool.self,       forKey: .hookExited)
@@ -133,6 +152,8 @@ struct PendingData: Decodable {
             // 只取第一行，最多 80 字
             let firstLine = cmd.split(separator: "\n").first.map(String.init) ?? cmd
             return firstLine.count > 80 ? String(firstLine.prefix(80)) + "…" : firstLine
+        case "apply_patch":
+            return patchSummary(raw["command"]?.str)
         case "WebFetch":
             return raw["url"]?.str ?? "(no url)"
         case "WebSearch":
@@ -151,7 +172,6 @@ struct PendingData: Decodable {
 
     private static func buildSections(toolName: String?, raw: [String: JSONValue]?, full: Bool) -> [DiffSection] {
         guard let raw, !raw.isEmpty else { return [] }
-        let limit = full ? Int.max : 0  // 0 signals "use per-type caps"
 
         switch toolName {
 
@@ -193,6 +213,9 @@ struct PendingData: Decodable {
 
         case "Bash", "run_command", "run_shell_command":
             return [.init(kind: .plain, text: raw["command"]?.str ?? raw["cmd"]?.str ?? raw["CommandLine"]?.str ?? "(no command)")]
+
+        case "apply_patch":
+            return patchSections(raw["command"]?.str, full: full)
 
         case "WebFetch":
             let url    = raw["url"]?.str ?? "?"
@@ -257,6 +280,41 @@ struct PendingData: Decodable {
     }
 
     // MARK: - Helpers
+
+    private static func patchSummary(_ command: String?) -> String {
+        guard let command, !command.isEmpty else { return "(no patch)" }
+        let prefixes = ["*** Update File: ", "*** Add File: ", "*** Delete File: ", "*** Move to: "]
+        for line in command.components(separatedBy: "\n") {
+            for prefix in prefixes where line.hasPrefix(prefix) {
+                return shortenPath(String(line.dropFirst(prefix.count)))
+            }
+        }
+        return "Patch (\(command.components(separatedBy: "\n").count) lines)"
+    }
+
+    private static func patchSections(_ command: String?, full: Bool) -> [DiffSection] {
+        guard let command, !command.isEmpty else { return [] }
+        let shown = full ? command : cap(command, 2_000)
+        var sections: [DiffSection] = []
+        for line in shown.components(separatedBy: "\n") {
+            let kind: DiffSection.Kind
+            if line.hasPrefix("*** ") || line.hasPrefix("@@") {
+                kind = .header
+            } else if line.hasPrefix("+") {
+                kind = .added
+            } else if line.hasPrefix("-") {
+                kind = .removed
+            } else {
+                kind = .plain
+            }
+            if sections.last?.kind == kind, let previous = sections.popLast() {
+                sections.append(.init(kind: kind, text: previous.text + "\n" + line))
+            } else {
+                sections.append(.init(kind: kind, text: line))
+            }
+        }
+        return sections
+    }
 
     /// LCS-based line diff: interleaves removed (red) and added (green) lines.
     /// Falls back to two-block display when either side exceeds 150 lines.
@@ -471,5 +529,36 @@ struct ClaudeUsageInfo {
         let h = Int(rem) / 3600
         let m = (Int(rem) % 3600) / 60
         return h > 0 ? "Resets in \(h)h \(m)m" : "Resets in \(m)m"
+    }
+}
+
+// MARK: - Account quota snapshot emitted by local Codex sessions
+
+enum CodexUsageState: Equatable {
+    case available(CodexUsageInfo)
+    case unavailable
+    case error(String)
+}
+
+struct CodexUsageInfo: Equatable {
+    let usedPercent: Int
+    let windowMinutes: Int
+    let resetsAt: Date?
+    let fetchedAt: Date
+
+    var isStale: Bool { Date().timeIntervalSince(fetchedAt) > 660 }
+
+    var windowText: String {
+        guard windowMinutes > 0 else { return "Account limit" }
+        if windowMinutes < 60 {
+            return "\(windowMinutes)m window"
+        }
+        if windowMinutes.isMultiple(of: 10_080) {
+            return "\(windowMinutes / 10_080)w window"
+        }
+        if windowMinutes.isMultiple(of: 1_440) {
+            return "\(windowMinutes / 1_440)d window"
+        }
+        return "\(windowMinutes / 60)h window"
     }
 }

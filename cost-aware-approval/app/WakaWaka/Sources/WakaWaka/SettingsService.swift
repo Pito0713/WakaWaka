@@ -4,7 +4,8 @@ import Foundation
 //
 // Schema written to ~/.wakawaka/settings.json:
 //   { "autoMode": { "claude-code": { "enabled": bool, "expiresAt": ISO8601|null },
-//                    "agy":         { "enabled": bool, "expiresAt": ISO8601|null } } }
+//                    "agy":         { "enabled": bool, "expiresAt": ISO8601|null },
+//                    "codex":       { "enabled": bool, "expiresAt": ISO8601|null } } }
 //
 // The hook treats an agent as auto-approved when `enabled === true` AND
 // (`expiresAt` is null OR the ISO timestamp has not yet passed). Do not
@@ -15,6 +16,7 @@ import Foundation
 enum AutoModeAgent: String {
     case claudeCode = "claude-code"
     case agy = "agy"
+    case codex = "codex"
 }
 
 /// One agent's auto-mode window. `expiresAt` is always emitted explicitly
@@ -61,12 +63,13 @@ struct WakaWakaSettings: Equatable {
     struct AutoModeMap: Equatable {
         var claudeCode: AgentAutoMode
         var agy: AgentAutoMode
+        var codex: AgentAutoMode
     }
 
     var autoMode: AutoModeMap
 
     static let empty = WakaWakaSettings(
-        autoMode: AutoModeMap(claudeCode: .disabled, agy: .disabled)
+        autoMode: AutoModeMap(claudeCode: .disabled, agy: .disabled, codex: .disabled)
     )
 }
 
@@ -74,18 +77,21 @@ extension WakaWakaSettings.AutoModeMap: Codable {
     private enum CodingKeys: String, CodingKey {
         case claudeCode = "claude-code"
         case agy
+        case codex
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         claudeCode = try c.decodeIfPresent(AgentAutoMode.self, forKey: .claudeCode) ?? .disabled
         agy = try c.decodeIfPresent(AgentAutoMode.self, forKey: .agy) ?? .disabled
+        codex = try c.decodeIfPresent(AgentAutoMode.self, forKey: .codex) ?? .disabled
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(claudeCode, forKey: .claudeCode)
         try c.encode(agy, forKey: .agy)
+        try c.encode(codex, forKey: .codex)
     }
 }
 
@@ -160,6 +166,7 @@ final class SettingsService {
         switch agent {
         case .claudeCode: settings.autoMode.claudeCode = newState
         case .agy:         settings.autoMode.agy = newState
+        case .codex:       settings.autoMode.codex = newState
         }
         write(settings)
     }

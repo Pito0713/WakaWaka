@@ -2,6 +2,17 @@ import AppKit
 import SwiftUI
 import UserNotifications
 
+func canWriteAllowDecision(for item: PendingData) -> Bool {
+    item.canBeAllowed
+}
+
+func canWriteAlwaysAllowDecision(for item: PendingData) -> Bool {
+    guard item.canBeAllowed, item.risk_level == .medium else { return false }
+    return item.tool_name == "Bash"
+        || item.tool_name == "run_command"
+        || item.tool_name == "run_shell_command"
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
@@ -19,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sessionStatusTimer: Timer?
     // Server-verified usage via `claude -p "/usage"` (10-minute interval)
     private var usageCommandTimer: Timer?
+    private var codexUsageTimer: Timer?
     // agy quota (5-minute interval)
     private var agyQuotaTimer: Timer?
     // Auto-mode expiry sweep (30-second interval)
@@ -44,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startPolling()
         startSessionStatusPolling()
         startUsageCommandPolling()
+        startCodexUsagePolling()
         startAgyQuotaPolling()
         startAutoModePolling()
         startP90Detection()
@@ -96,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.onRefreshSession = { [weak self] in
             self?.fetchSessionStatus()
             self?.fetchUsageCommand()
+            self?.fetchCodexUsage()
         }
 
         popover = NSPopover()
@@ -412,6 +426,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settings = SettingsService.shared.load()
         if settings.autoMode.claudeCode.isExpired { SettingsService.shared.setAutoMode(agent: .claudeCode, enabled: false) }
         if settings.autoMode.agy.isExpired        { SettingsService.shared.setAutoMode(agent: .agy, enabled: false) }
+        if settings.autoMode.codex.isExpired      { SettingsService.shared.setAutoMode(agent: .codex, enabled: false) }
         viewModel.applyAutoMode(from: SettingsService.shared.load())
     }
 
@@ -434,6 +449,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.viewModel.claudeUsageInfo    = result
                 self.viewModel.isLoadingClaudeUsage = false
+            }
+        }
+    }
+
+    // MARK: - Codex account usage (local session snapshot, 10-minute interval)
+
+    private func startCodexUsagePolling() {
+        fetchCodexUsage()
+        let timer = Timer(timeInterval: 600, repeats: true) { [weak self] _ in
+            self?.fetchCodexUsage()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        codexUsageTimer = timer
+    }
+
+    private func fetchCodexUsage() {
+        viewModel.isLoadingCodexUsage = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let state = CodexUsageService.load()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.viewModel.codexUsageState = state
+                self.viewModel.isLoadingCodexUsage = false
             }
         }
     }
@@ -813,13 +851,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.pendingItems = pendingQueue
 
         // Animate height change
-        // session status bar: divider(1) + label(20) + bar(18) + burn+cost row(18) + padding(18) = ~82
-        let sessionH: CGFloat = 82
+        // dual-provider usage: title + Claude rows + divider + Codex rows + padding
+        let sessionH: CGFloat = 136
         // auto-mode bar: divider(1) + row(~17) + vertical padding(16) = ~34
         let autoModeH: CGFloat = 34
-        let targetH: CGFloat = pendingQueue.isEmpty
-            ? 100 + autoModeH + sessionH
-            : min(CGFloat(100 + pendingQueue.count * 52) + (viewModel.expandedIndex != nil ? 340 : 0) + autoModeH + sessionH, 600)
+        // idle: PacMan canvas + "No pending approval" + vertical padding(40)
+        let idleH: CGFloat = 100
+        // "待審批" header: subheadline(~17) + vertical padding(20) + divider(1)
+        let queueHeaderH: CGFloat = 38
+        // collapsed row: tool name(~17) + summary(~13) + spacing(1) + vertical padding(20)
+        let queueRowH: CGFloat = 51
+        // inter-row divider
+        let queueDividerH: CGFloat = 1
+        let expandedDetailH: CGFloat = 340
+        let maxH: CGFloat = 600
+
+        let chromeH = autoModeH + sessionH
+        let targetH: CGFloat
+        if pendingQueue.isEmpty {
+            targetH = idleH + chromeH
+        } else {
+            let rowCount = CGFloat(pendingQueue.count)
+            let listH = rowCount * queueRowH + max(0, rowCount - 1) * queueDividerH
+            let detailH = viewModel.expandedIndex != nil ? expandedDetailH : 0
+            targetH = min(queueHeaderH + listH + detailH + chromeH, maxH)
+        }
 
         if abs(popover.contentSize.height - targetH) > 1 {
             if popover.isShown {
@@ -846,14 +902,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func allow(at index: Int) {
         guard index < pendingQueue.count else { return }
-        // Safety: don't write a decision for expired items (hook can't read it)
-        guard !pendingQueue[index].isExpired else { removePending(at: index); return }
+        guard canWriteAllowDecision(for: pendingQueue[index]) else { return }
         writeDecision(#"{"decision":"allow"}"#, for: pendingQueue[index])
         removePending(at: index)
     }
 
     func alwaysAllow(at index: Int) {
         guard index < pendingQueue.count else { return }
+        guard canWriteAlwaysAllowDecision(for: pendingQueue[index]) else { return }
         writeDecision(#"{"decision":"always"}"#, for: pendingQueue[index])
         removePending(at: index)
     }

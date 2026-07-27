@@ -15,6 +15,11 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("UserNotifications"),
             ]
-        )
+        ),
+        .testTarget(
+            name: "WakaWakaTests",
+            dependencies: ["WakaWaka"],
+            path: "Tests/WakaWakaTests"
+        ),
     ]
 )

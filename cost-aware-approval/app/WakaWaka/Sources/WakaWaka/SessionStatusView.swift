@@ -12,6 +12,8 @@ struct SessionStatusView: View {
     let isLoading: Bool
     /// Server-verified data from `claude -p "/usage"` — overrides local estimates when present.
     var claudeUsage: ClaudeUsageInfo? = nil
+    var codexUsage: CodexUsageState = .unavailable
+    var isLoadingCodex: Bool = false
     /// Called when the user taps the manual-refresh button (↺).
     var onRefresh: (() -> Void)? = nil
 
@@ -69,12 +71,24 @@ struct SessionStatusView: View {
         claudeUsage.map { !$0.isStale } ?? false
     }
 
+    private func compactResetText(from reset: Date) -> String {
+        let remainingSeconds = Int(reset.timeIntervalSinceNow)
+        guard remainingSeconds > 0 else { return "Resetting…" }
+        let days = remainingSeconds / 86_400
+        guard days > 0 else { return ClaudeUsageInfo.resetsInText(from: reset) }
+        let hours = (remainingSeconds % 86_400) / 3_600
+        if hours > 0 { return "Resets in \(days)d \(hours)h" }
+        let minutes = (remainingSeconds % 3_600) / 60
+        return "Resets in \(days)d \(minutes)m"
+    }
+
     // MARK: - Body
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Divider()
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
+                usageHeader
                 if isLoading && usage == nil {
                     HStack(spacing: 6) {
                         ProgressView().scaleEffect(0.65)
@@ -86,13 +100,14 @@ struct SessionStatusView: View {
                     rowProgressBar(u)
                     rowBurnRate(u)
                 } else {
-                    Text("Session usage unavailable")
-                        .font(.caption).foregroundStyle(.secondary)
+                    unavailableClaudeRow
                 }
+                Divider().padding(.vertical, 2)
+                codexRow
             }
             .padding(.horizontal, 14)
-            .padding(.top, 8)
-            .padding(.bottom, 10)
+            .padding(.top, 12)
+            .padding(.bottom, 14)
         }
         .onReceive(ticker) { t in now = t }
         .sheet(isPresented: $showCalibration) { calibrationSheet }
@@ -100,10 +115,40 @@ struct SessionStatusView: View {
 
     // MARK: - Rows
 
+    private var usageHeader: some View {
+        HStack {
+            Text("USAGE")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+            if let refresh = onRefresh {
+                Button {
+                    guard !isRefreshing else { return }
+                    isRefreshing = true
+                    refresh()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                        isRefreshing = false
+                    }
+                } label: {
+                    Image(systemName: isRefreshing ? "arrow.trianglehead.2.clockwise.rotate.90" : "arrow.clockwise")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(isRefreshing ? .degrees(360) : .zero)
+                        .animation(
+                            isRefreshing ? .linear(duration: 0.7).repeatForever(autoreverses: false) : .default,
+                            value: isRefreshing
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("立即重新抓取 Claude 與 Codex usage")
+            }
+        }
+    }
+
     @ViewBuilder
     private func rowLabel(_ u: UsageOutput) -> some View {
         HStack(spacing: 6) {
-            Text("Current / total").font(.caption.weight(.medium))
+            Text("Claude").font(.caption.weight(.medium)).frame(width: 48, alignment: .leading)
 
             // Limit source badge (tap = open calibration)
             // Shows "⚡ 276.2K / 375.2K" when session data available
@@ -134,30 +179,6 @@ struct SessionStatusView: View {
             Text(resetsInText(for: u))
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 .id(now)
-
-            // ↺ Manual refresh button
-            if let refresh = onRefresh {
-                Button {
-                    guard !isRefreshing else { return }
-                    isRefreshing = true
-                    refresh()
-                    // Keep spinning until both JSONL parser (~0.5s) and /usage (~2.1s) finish
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                        isRefreshing = false
-                    }
-                } label: {
-                    Image(systemName: isRefreshing ? "arrow.trianglehead.2.clockwise.rotate.90" : "arrow.clockwise")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(isRefreshing ? .degrees(360) : .zero)
-                        .animation(isRefreshing
-                            ? .linear(duration: 0.7).repeatForever(autoreverses: false)
-                            : .default,
-                            value: isRefreshing)
-                }
-                .buttonStyle(.plain)
-                .help("立即重新抓取 session 資料")
-            }
         }
     }
 
@@ -178,6 +199,79 @@ struct SessionStatusView: View {
             .frame(height: 6)
 
             Text("\(Int(progress * 100))%")
+                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                .frame(minWidth: 32, alignment: .trailing)
+        }
+    }
+
+    private var unavailableClaudeRow: some View {
+        HStack {
+            Text("Claude").font(.caption.weight(.medium)).frame(width: 48, alignment: .leading)
+            Text("unavailable").font(.caption).foregroundStyle(.secondary)
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private var codexRow: some View {
+        switch codexUsage {
+        case .available(let info):
+            codexAvailableRow(info)
+        case .unavailable:
+            codexUnavailableRow(message: isLoadingCodex ? "loading…" : "unavailable")
+        case .error:
+            codexUnavailableRow(message: "error")
+        }
+    }
+
+    private func codexAvailableRow(_ info: CodexUsageInfo) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Codex").font(.caption.weight(.medium)).frame(width: 48, alignment: .leading)
+                Circle()
+                    .fill(info.isStale ? Color.orange : Color.green.opacity(0.85))
+                    .frame(width: 5, height: 5)
+                    .help(info.isStale ? "Stale local account snapshot" : "Local Codex account snapshot")
+                Text(info.isStale ? "local · stale" : "local")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Text(info.windowText).font(.caption).foregroundStyle(.secondary)
+                if let reset = info.resetsAt {
+                    Text("· \(compactResetText(from: reset))")
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .layoutPriority(1)
+                }
+            }
+            providerProgressBar(percent: info.usedPercent)
+        }
+    }
+
+    private func codexUnavailableRow(message: String) -> some View {
+        HStack(spacing: 6) {
+            Text("Codex").font(.caption.weight(.medium)).frame(width: 48, alignment: .leading)
+            Circle().fill(Color.secondary.opacity(0.5)).frame(width: 5, height: 5)
+            Text(message).font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Text("Account quota").font(.caption2).foregroundStyle(.tertiary)
+        }
+    }
+
+    private func providerProgressBar(percent: Int) -> some View {
+        let progress = min(max(Double(percent) / 100, 0), 1)
+        return HStack(spacing: 10) {
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.secondary.opacity(0.2)).frame(height: 6)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(barColor(progress: progress))
+                        .frame(width: geometry.size.width * progress, height: 6)
+                }
+            }
+            .frame(height: 6)
+            Text("\(percent)%")
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 .frame(minWidth: 32, alignment: .trailing)
         }
