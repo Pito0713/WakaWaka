@@ -80,7 +80,7 @@ const SAFE_BASH_PREFIXES = new Set([
   // ── Text reading / querying ──────────────────────────────────────────────
   'cat', 'head', 'tail', 'wc', 'diff', 'less', 'more',
   'grep', 'egrep', 'fgrep', 'rg', 'ag',
-  'awk', 'jq',
+  'awk', 'sed', 'jq',
 
   // ── Build / compile / test ───────────────────────────────────────────────
   // (creates build artifacts but not destructive to source; HIGH patterns still

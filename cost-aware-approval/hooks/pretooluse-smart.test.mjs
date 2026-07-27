@@ -220,6 +220,21 @@ test('Bash git (MEDIUM) with allowlisted prefix → auto allow', async () => {
   resetAllowlist();
 });
 
+test('Bash sed (read-only) → built-in safe prefix auto allow', async () => {
+  const sid = 'test-safe-sed';
+  cleanupSession(sid);
+
+  const result = await runHook({
+    session_id: sid,
+    tool_name: 'Bash',
+    tool_input: { command: "sed -n '1,80p' README.md" },
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(parseDecision(result.stdout), 'allow');
+  assert.ok(!fs.existsSync(pendingPath(sid)));
+});
+
 test('"always" decision saves prefix for MEDIUM, bypasses next time', async () => {
   const sid = 'test-always';
   cleanupSession(sid);
