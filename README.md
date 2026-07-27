@@ -1,25 +1,26 @@
-# WakaWaka — Cost-Aware Approval for Claude Code
+# WakaWaka — Cost-Aware Approval for AI Coding Agents
 
-> macOS menubar 守門員：攔截 Claude Code 與 agy（Antigravity CLI）的工具呼叫，顯示 token 用量、評估操作風險，並讓你決定放行或拒絕。
+> macOS menubar 守門員：攔截 Claude Code、Codex 與 agy（Antigravity CLI）的工具呼叫，顯示用量、評估操作風險，並讓你決定放行或拒絕。
 
 ---
 
 ## 專案介紹
 
-Claude Code 預設會自動執行所有工具（Bash、Edit、Write、WebFetch…），但這帶來兩個問題：
+AI coding agent 會代表使用者呼叫 shell、修改檔案或連接外部服務，但這帶來兩個問題：
 
-1. **成本失控**：你不知道目前 5 小時用量窗口還剩多少 token，也不知道這次操作會燒掉多少
+1. **成本失控**：你不知道目前 rolling window 還剩多少用量，也不知道這次操作會消耗多少額度
 2. **操作失控**：高風險指令（`sudo`、`git push --force`、`rm -rf`）會在你不注意時悄悄執行
 
-WakaWaka 透過 **PreToolUse hook** 機制攔截每一個工具呼叫（支援 Claude Code 與 agy 雙代理），路由到 macOS menubar app **WakaWaka** 進行人工審批，同時即時顯示 5h rolling window 的 token 用量與費用估算。
+WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依風險分類後自動放行、立即拒絕或路由到 macOS menubar app 進行人工審批。App 同時整合 Claude Code、Codex 與 agy 的可用量資訊。
 
 ### 核心功能
 
 | 功能                 | 說明                                                                                                     |
 | -------------------- | -------------------------------------------------------------------------------------------------------- |
-| **三層風險分類**     | CRITICAL（彈窗，需明確確認）→ HIGH（強制彈窗）→ MEDIUM（可設定 allowlist）                               |
+| **三層風險分類**     | CRITICAL → HIGH → MEDIUM；各 agent adapter 採 fail-closed 策略，Codex 的 CRITICAL shell 操作會立即拒絕 |
 | **Auto 模式**        | per-agent 開關；開啟後自動放行白名單 MEDIUM（Edit/Write/MultiEdit + 未知 bash），HIGH/CRITICAL 與 MCP 仍彈窗；30 分鐘 TTL + fail-closed 稽核（`~/.wakawaka/auto-audit.jsonl`） |
-| **多代理支援**       | 同時守護 Claude Code（`pretooluse.mjs`）與 agy（`pretooluse-agy.mjs`），agent badge 顯示來源             |
+| **多代理支援**       | 同時守護 Claude Code、Codex 與 agy，agent badge 顯示工具呼叫來源                                         |
+| **Codex Usage**      | 從本機 Codex session 資料彙整 5h 與 weekly 用量，獨立於 Claude Code usage 顯示                            |
 | **agy Quota Bar**    | 每個 agy 審批卡片即時顯示 Gemini quota 用量（%）與重置倒數（↻ Xh Xm），從 agy local language server 取得 |
 | **Token 用量追蹤**   | 從 `~/.claude/projects/` JSONL 解析，全域合併去重，誤差 < 3%                                             |
 | **Server 驗證用量**  | `claude -p "/usage"` 每 10 分鐘校正一次，進度條旁綠點表示資料已驗證                                      |
@@ -42,7 +43,15 @@ WakaWaka 透過 **PreToolUse hook** 機制攔截每一個工具呼叫（支援 C
 │                              ▼  agent: "claude-code"         │
 │                    ~/.wakawaka/state/                        │
 └──────────────────────────────────────────────────────────────┘
-                         ▲              │
+                                        │
+┌──────────────────────────────────────────────────────────────┐
+│                       Codex（使用者端）                       │
+│  Codex ──tool call──► pretooluse-codex.mjs                  │
+│                          │ classify + write pending          │
+│                          ▼  agent: "codex"                   │
+│                    ~/.wakawaka/state/                        │
+└──────────────────────────────────────────────────────────────┘
+                                        │
 ┌──────────────────────────────────────────────────────────────┐
 │                      agy（使用者端）                          │
 │  Gemini AI ──tool call──► pretooluse-agy.mjs                │
@@ -79,6 +88,7 @@ WakaWaka 透過 **PreToolUse hook** 機制攔截每一個工具呼叫（支援 C
 cost-aware-approval/
 ├── hooks/
 │   ├── pretooluse.mjs          # Claude Code PreToolUse hook
+│   ├── pretooluse-codex.mjs    # Codex PreToolUse adapter
 │   └── pretooluse-agy.mjs      # agy (Antigravity CLI) PreToolUse hook
 ├── parser/
 │   ├── usage-calculator.ts     # Token 用量計算（兩遍掃描 + global dedup）
@@ -91,11 +101,14 @@ cost-aware-approval/
         ├── SessionStatusView.swift # 5h 用量進度條 + 重置倒數 + server 驗證綠點
         ├── PopoverViewModel.swift  # UI 狀態管理（含 claudeUsageInfo、agyQuota）
         ├── AgyQuotaService.swift   # agy local language server quota 查詢（port 探測 + HTTP）
+        ├── CodexUsageService.swift # Codex 5h / weekly 本機用量彙整
+        ├── SettingsService.swift   # per-agent Auto Mode 設定與期限
         ├── ParserRunner.swift      # npx tsx bridge + claude /usage 呼叫
         └── Models.swift            # PendingData、UsageOutput、ClaudeUsageInfo、P90Result
 
 ~/.gemini/config/hooks.json         # agy 全局 hook 配置（指向 pretooluse-agy.mjs）
 ~/.claude/settings.json             # Claude Code hook 配置（指向 pretooluse.mjs）
+.codex/hooks.json                   # Codex 專案 hook 配置（指向 pretooluse-codex.mjs）
 ```
 
 ### 關鍵資料流
@@ -103,12 +116,12 @@ cost-aware-approval/
 #### 審批流程（Hook ↔ App）
 
 ```
-pretooluse.mjs stdin
+PreToolUse adapter stdin
   └─► 解析 tool_name + tool_input
       └─► 風險分類（CRITICAL / HIGH / MEDIUM）
-          ├─ CRITICAL → 立即 exit 2（auto-deny）
-          ├─ 在 AUTO_ALLOW_TOOLS 清單中 → exit 0（auto-allow）
-          └─ 其他 → 寫 pending_<sid>.json → 等待 decision_<sid>.json
+          ├─ 安全 read / allowlist → auto-allow
+          ├─ Codex CRITICAL shell → immediate deny
+          └─ 其他需審批操作 → 寫 pending_<approval_id>.json
                            ↑                         ↓
                      WakaWaka 每 1s poll       使用者在 popover 點擊 Allow / Deny
 ```
@@ -218,12 +231,23 @@ cd WakaWaka
 
 ## 風險分類說明
 
-| 等級           | 行為                            | 範例                                                                      |
-| -------------- | ------------------------------- | ------------------------------------------------------------------------- |
-| **CRITICAL**   | 自動拒絕，不彈窗                | `rm -rf /`、`curl \| sh`、`dd of=/dev/disk0`                              |
-| **HIGH**       | 強制彈窗（無法 allowlist 略過） | `sudo`、`git push --force`、`chmod`、`kill`                               |
-| **MEDIUM**     | 彈窗，可加入 allowlist          | 一般 Bash 指令                                                            |
-| **Auto-allow** | 靜默放行                        | `Read`、`Glob`、`Grep`、`WebSearch` 等純讀取操作（`Edit`/`Write` 需審批） |
+風險順序固定為 `CRITICAL > HIGH > MEDIUM`。分類器會先檢查 `rm` 目標及 CRITICAL pattern，再檢查 HIGH pattern；未命中者預設為 MEDIUM。外部或未知工具不因「無法分類」而自動視為安全。
+
+### Codex
+
+| 等級 | Codex 攔截行為 | 代表範例 |
+| ---- | -------------- | -------- |
+| **CRITICAL** | hook 立即回傳 `deny`，不建立人工審批；Auto Mode 與 allowlist 均不可繞過 | `rm -rf /`、`rm -rf ~`、`sudo rm`、`curl ... \| sh`、`dd ... of=/dev/disk0`、`mkfs` |
+| **HIGH** | 一律建立 pending item，等待 WakaWaka 人工決定；Auto Mode 與 allowlist 均不可繞過 | `sudo`、`git push --force`、`git reset --hard`、`git clean -f`、`chmod`、`chown`、`kill`、`rsync --delete`、`ssh` |
+| **MEDIUM** | 預設建立 pending item；簡單 read command、使用者 allowlist，或符合條件且稽核成功的 Auto Mode 可放行 | `cp source target`、`apply_patch`、MCP／未知 local tool、其他未命中高風險 pattern 的 Bash |
+
+Codex 的安全 read command 僅限無 pipe、redirect、command substitution 或危險 option 的單一命令，例如 `pwd`、`ls`、`rg`、`cat`、`ps`。`rg --pre`、複合命令及含 `$()`／backtick 的命令會回到 MEDIUM 人工審批。
+
+> Coverage 限制：此 hook 是本機 Codex tool path 的審批層，不應視為完整 sandbox。Hosted tools 或平台明確不送入 `PreToolUse` 的 specialized path，不在這個 adapter 的攔截範圍內。
+
+### Claude Code 與 agy
+
+Claude Code 與 agy 使用相同三層名稱，但 adapter 的最終處置可能不同；例如部分 CRITICAL 操作會保留人工最終決定。修改政策時應同步更新各 hook 的 regression tests，不要從 Codex 表格推論其他 agent 的行為。
 
 ---
 
@@ -314,6 +338,25 @@ P90 偵測在以下情況會有大誤差：
 ## Changelog
 
 版本格式：`v主版本.功能版本.修補版本`，遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/) 規範。
+
+---
+
+### v0.9.0 — 2026-07-27
+
+#### Added
+
+- **Codex 接入審批流程**：Codex 透過 `.codex/hooks.json` + `pretooluse-codex.mjs` 走與 Claude Code 相同的檔案輪詢審批；CRITICAL 工具即時拒絕，其餘風險等級寫入 `pending_codex_<toolUseId>` 交付人工審查
+- **Codex 帳號用量顯示**：menubar 讀取本地最新 Codex `token_count` event，popover 改為 Claude + Codex 雙 provider 版面
+- **Codex per-agent auto 模式**：Codex 加入 30 分鐘 TTL 的自動放行開關，與既有 Claude Code / agy 開關並列
+- **AGENTS.md**：Codex 面向的專案指南
+
+#### Changed
+
+- **hook 安全前綴新增 `sed`**：唯讀 sed 指令（如 `sed -n '1,80p' file`）自動放行，不再提示
+
+#### Fixed
+
+- **popover 高度**：pending 卡片高度公式改用具名常數並改為雙 provider 版面計算，修正多餘留白
 
 ---
 
