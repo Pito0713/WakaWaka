@@ -67,7 +67,8 @@ struct ContentView: View {
                 claudeUsage: model.claudeUsageInfo,
                 codexUsage: model.codexUsageState,
                 isLoadingCodex: model.isLoadingCodexUsage,
-                onRefresh: { model.onRefreshSession() }
+                onRefresh: { model.onRefreshSession() },
+                onOpenDashboard: { model.onOpenDashboard() }
             )
         }
         .frame(width: 480)

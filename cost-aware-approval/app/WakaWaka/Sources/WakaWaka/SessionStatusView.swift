@@ -16,6 +16,8 @@ struct SessionStatusView: View {
     var isLoadingCodex: Bool = false
     /// Called when the user taps the manual-refresh button (↺).
     var onRefresh: (() -> Void)? = nil
+    /// Called when the user taps the usage-dashboard button (📊).
+    var onOpenDashboard: (() -> Void)? = nil
 
     @AppStorage(ClaudePlan.detectedLimitKey) private var detectedLimit: Int = 0
     @AppStorage("manualPlanLimit")           private var manualLimit:   Int = 0
@@ -121,6 +123,18 @@ struct SessionStatusView: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
             Spacer()
+            if let openDashboard = onOpenDashboard {
+                Button {
+                    openDashboard()
+                } label: {
+                    Image(systemName: "chart.bar.xaxis")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("每日用量儀表板")
+                .padding(.trailing, 4)
+            }
             if let refresh = onRefresh {
                 Button {
                     guard !isRefreshing else { return }

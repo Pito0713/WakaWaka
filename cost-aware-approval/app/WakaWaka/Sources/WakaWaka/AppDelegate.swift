@@ -16,6 +16,7 @@ func canWriteAlwaysAllowDecision(for item: PendingData) -> Bool {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
+    private var dashboardController: UsageDashboardWindowController?
     private var pollingTimer: Timer?
 
     private let viewModel = PopoverViewModel()
@@ -111,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.fetchUsageCommand()
             self?.fetchCodexUsage()
         }
+        viewModel.onOpenDashboard = { [weak self] in self?.showUsageDashboard() }
 
         popover = NSPopover()
         popover.behavior = .applicationDefined
@@ -816,6 +818,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Popover
+
+    private func showUsageDashboard() {
+        if dashboardController == nil {
+            dashboardController = UsageDashboardWindowController()
+        }
+        dashboardController?.present()
+    }
 
     @objc private func togglePopover() {
         // Always toggle: clicking the icon closes the popover even with pending items.

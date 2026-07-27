@@ -43,6 +43,8 @@ final class PopoverViewModel: ObservableObject {
     var onRefreshSession: () -> Void = {}
     /// User flipped an auto-mode toggle in the UI (keyed by agent, not queue index).
     var onToggleAutoMode: (AutoModeAgent, Bool) -> Void = { _, _ in }
+    /// User tapped the "usage dashboard" button; AppDelegate opens the window.
+    var onOpenDashboard: () -> Void = {}
 
     /// Mirrors a freshly-loaded settings snapshot into the published UI state.
     func applyAutoMode(from settings: WakaWakaSettings) {

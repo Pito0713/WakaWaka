@@ -31,6 +31,7 @@ enum ParserRunner {
 
     private static let calculatorPath = "\(parserDir)/usage-calculator.ts"
     private static let p90Path        = "\(parserDir)/p90-detector.ts"
+    private static let dailyUsagePath = "\(parserDir)/daily-usage.ts"
 
     // MARK: - Public API
 
@@ -56,6 +57,13 @@ enum ParserRunner {
     static func runP90Detector() -> P90Result? {
         runScript(scriptPath: p90Path, extraArgs: [], timeout: 60)
             .flatMap { try? JSONDecoder().decode(P90Result.self, from: $0) }
+    }
+
+    /// Aggregates per-day, per-agent usage over the last `days` days for the dashboard.
+    /// Blocks up to 30s; returns nil on failure.
+    static func runDailyUsage(days: Int) -> DailyUsage? {
+        runScript(scriptPath: dailyUsagePath, extraArgs: ["--days", String(days)], timeout: 30)
+            .flatMap { try? JSONDecoder().decode(DailyUsage.self, from: $0) }
     }
 
     // MARK: - Shared process runner
