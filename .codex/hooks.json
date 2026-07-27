@@ -11,6 +11,17 @@
         ]
       }
     ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/cost-aware-approval/hooks/permissionrequest-codex.mjs\""
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
