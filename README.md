@@ -341,6 +341,23 @@ P90 偵測在以下情況會有大誤差：
 
 ---
 
+### v0.10.0 — 2026-07-27
+
+#### Added
+
+- **每日用量儀表板**：popover 的 USAGE 列新增 📊 入口，開啟獨立視窗（720×520，可調整大小）顯示每日 token 用量與各 agent 佔比
+  - 資料層 `parser/daily-usage.ts`：聚合 Claude Code 與 Codex 的每日 token，依**本地時區**分日；30 秒 timeout，缺 agent 目錄不報錯
+  - 三個計數陷阱處理：Claude 以 `requestId|msgId` 去重（last-write-wins）、Codex 以 `last_token_usage` 逐 event 加總（不用 running total）、兩家 `input_tokens` 語意相反時正規化為 uncached / cached
+  - 支援 7 / 14 / 30 天期間切換與 成本 / Token 分母切換（Swift Charts 堆疊長條）
+  - `DailyUsageService` 60 秒記憶體快取，避免重複支付 `npx tsx` 冷啟動成本
+
+#### 已知限制
+
+- **Codex 成本待補**：`pricing.json` 尚未填入 Codex 價格，成本模式下 Codex 顯示「—」而非估算值（Token 模式正常顯示）
+- **agy 未納入**：agy 本地 API 只提供剩餘額度 %，無 token 數據可聚合
+
+---
+
 ### v0.9.0 — 2026-07-27
 
 #### Added
