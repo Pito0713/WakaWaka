@@ -5,5 +5,14 @@
   "inputPerMTok": 3.0,
   "outputPerMTok": 15.0,
   "cacheReadPerMTok": 0.3,
-  "cacheCreationPerMTok": 3.75
+  "cacheCreationPerMTok": 3.75,
+  "codex": {
+    "_note": "Codex/GPT 每 MTok 價格待確認後填入（含抓取日期）。任一價格為 null 時，儀表板 Codex 成本顯示為 — 而非 $0，不進行估算。cachedInputPerMTok 對應 Codex 的 cached_input_tokens。",
+    "_date": null,
+    "model": null,
+    "inputPerMTok": null,
+    "cachedInputPerMTok": null,
+    "outputPerMTok": null,
+    "cacheCreationPerMTok": null
+  }
 }
