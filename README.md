@@ -341,6 +341,18 @@ P90 偵測在以下情況會有大誤差：
 
 ---
 
+### v0.11.0 — 2026-07-28
+
+#### Changed
+
+- **popover 精簡**：idle / pending 兩態改用統一的 `PopoverFooter` —— Auto 開關 + 📊 儀表板 / ↻ 重整 + Claude 5h 與 Codex（動態窗口）兩條額度 bar；審批區改為可捲動、footer 常駐底部。burn rate、校正、Codex 詳細行等觀測細節移出 popover。
+
+#### Added
+
+- **儀表板即時額度區**：用量儀表板頂部新增「即時額度」—— Claude / Codex 兩條額度 bar + burn rate + 預估滿 % + 校正按鈕，資料由開啟時的即時 snapshot（`LiveQuotaSnapshot`）提供，`nil` 時顯示佔位。
+
+---
+
 ### v0.10.0 — 2026-07-27
 
 #### Added
