@@ -25,8 +25,12 @@ final class UsageDashboardWindowController: NSWindowController {
         window.contentViewController = NSHostingController(rootView: UsageDashboardView(service: service))
     }
 
-    /// Brings the window forward and (re)loads the current window length.
-    func present() {
+    /// Brings the window forward with a fresh live-quota snapshot and (re)loads
+    /// the current window length.
+    func present(liveQuota: LiveQuotaSnapshot?) {
+        window?.contentViewController = NSHostingController(
+            rootView: UsageDashboardView(service: service, liveQuota: liveQuota)
+        )
         service.load(days: service.days)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
@@ -36,15 +40,37 @@ final class UsageDashboardWindowController: NSWindowController {
 
 // MARK: - Root view
 
+struct LiveQuotaSnapshot {
+    let claudeUsage: UsageOutput?
+    let claudeServer: ClaudeUsageInfo?
+    let codex: CodexUsageState
+}
+
 struct UsageDashboardView: View {
     @ObservedObject var service: DailyUsageService
+    let liveQuota: LiveQuotaSnapshot?
+
+    @AppStorage("manualPlanLimit") private var manualPlanLimit = 0
+    @AppStorage(ClaudePlan.detectedLimitKey) private var detectedLimit = 0
     @State private var daysSelection = 7
     @State private var metric: UsageMetric = .cost
+    @State private var isShowingCalibration = false
+    @State private var calibrationInput = ""
+    @State private var now = Date()
+    private let ticker = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     private static let agentColors: [String: Color] = [
         UsageAgent.claude.rawValue: .blue,
         UsageAgent.codex.rawValue:  .green,
     ]
+
+    init(service: DailyUsageService, liveQuota: LiveQuotaSnapshot? = nil) {
+        self.service = service
+        self.liveQuota = liveQuota
+        // Mirror the service's current window so a rebuilt rootView (via present)
+        // shows a picker that matches the data actually loaded, not a reset to 7.
+        _daysSelection = State(initialValue: service.days)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,6 +79,10 @@ struct UsageDashboardView: View {
             content
         }
         .frame(minWidth: 560, minHeight: 400)
+        .onReceive(ticker) { now = $0 }
+        .sheet(isPresented: $isShowingCalibration) {
+            calibrationSheet
+        }
     }
 
     // MARK: Header
@@ -89,8 +119,17 @@ struct UsageDashboardView: View {
 
     // MARK: State routing
 
-    @ViewBuilder
     private var content: some View {
+        VStack(spacing: 0) {
+            liveQuotaSection
+                .padding(16)
+            Divider()
+            dailyUsageContent
+        }
+    }
+
+    @ViewBuilder
+    private var dailyUsageContent: some View {
         switch service.state {
         case .loading:
             ProgressView("讀取中…")
@@ -133,6 +172,226 @@ struct UsageDashboardView: View {
             }
             .padding(16)
         }
+    }
+
+    // MARK: Live quota
+
+    private var liveQuotaSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("即時額度").font(.subheadline.weight(.semibold))
+                Spacer()
+                Button("校正") {
+                    calibrationInput = manualPlanLimit > 1_000 ? String(manualPlanLimit) : ""
+                    isShowingCalibration = true
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if let liveQuota {
+                claudeQuotaRow(liveQuota)
+                codexQuotaRow(liveQuota.codex)
+            } else {
+                Text("尚無即時資料")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func claudeQuotaRow(_ snapshot: LiveQuotaSnapshot) -> some View {
+        let progress = claudeProgress(snapshot)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Claude 5h").font(.callout.weight(.medium))
+                if let server = snapshot.claudeServer {
+                    freshnessIndicator(isStale: server.isStale)
+                }
+                Spacer()
+                Text(claudeResetText(snapshot))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .id(now)
+            }
+            quotaProgressBar(progress: progress, percentText: "\(Int(progress * 100))%")
+            claudeBurnRate(snapshot.claudeUsage)
+        }
+    }
+
+    @ViewBuilder
+    private func codexQuotaRow(_ state: CodexUsageState) -> some View {
+        switch state {
+        case .available(let info):
+            let progress = clampedProgress(Double(info.usedPercent) / 100)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text("Codex \(info.windowText)").font(.callout.weight(.medium))
+                    freshnessIndicator(isStale: info.isStale)
+                    Spacer()
+                    Text(info.resetsAt.map(compactResetText) ?? "—")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .id(now)
+                }
+                quotaProgressBar(progress: progress, percentText: "\(info.usedPercent)%")
+            }
+        case .unavailable:
+            unavailableQuotaRow(label: "Codex 7d", message: "unavailable")
+        case .error:
+            unavailableQuotaRow(label: "Codex 7d", message: "error")
+        }
+    }
+
+    private func unavailableQuotaRow(label: String, message: String) -> some View {
+        HStack {
+            Text(label).font(.callout.weight(.medium))
+            Spacer()
+            Text(message).font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func quotaProgressBar(progress: Double, percentText: String) -> some View {
+        HStack(spacing: 10) {
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.secondary.opacity(0.2))
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(quotaBarColor(progress))
+                        .frame(width: geometry.size.width * progress)
+                }
+            }
+            .frame(height: 7)
+            Text(percentText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .frame(minWidth: 34, alignment: .trailing)
+        }
+    }
+
+    @ViewBuilder
+    private func claudeBurnRate(_ usage: UsageOutput?) -> some View {
+        if let usage,
+           let start = usage.sessionStart,
+           let reset = usage.sessionReset,
+           let output = usage.sessionOutput {
+            let elapsedHours = max(Date().timeIntervalSince(start) / 3_600, 0.001)
+            if elapsedHours > 0.1 {
+                let burnRate = Double(output) / elapsedHours
+                let remainingHours = max(reset.timeIntervalSinceNow / 3_600, 0)
+                let estimatedProgress = (Double(output) + burnRate * remainingHours) / Double(planLimit)
+                HStack(spacing: 6) {
+                    Image(systemName: "flame.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange.opacity(0.8))
+                    Text("~\(formatTokens(Int(burnRate)))/h")
+                    Text("·").foregroundStyle(.tertiary)
+                    Text("預估滿 \(Int(min(estimatedProgress * 100, 999)))%")
+                        .foregroundStyle(burnRateColor(estimatedProgress))
+                        .id(now)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            }
+        }
+    }
+
+    private var calibrationSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("校正 Claude 額度").font(.headline)
+            Text("輸入方案在 5 小時滾動窗內的 output-token 上限。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("例如 44000", text: $calibrationInput)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                if manualPlanLimit > 1_000 {
+                    Button("清除") {
+                        manualPlanLimit = 0
+                        isShowingCalibration = false
+                    }
+                    .foregroundStyle(.red)
+                }
+                Spacer()
+                Button("取消") { isShowingCalibration = false }
+                Button("套用") {
+                    guard let limit = parsedCalibrationLimit else { return }
+                    manualPlanLimit = limit
+                    isShowingCalibration = false
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(parsedCalibrationLimit == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+    }
+
+    private var parsedCalibrationLimit: Int? {
+        guard let limit = Int(calibrationInput), limit > 1_000 else { return nil }
+        return limit
+    }
+
+    private var planLimit: Int {
+        if manualPlanLimit > 1_000 { return manualPlanLimit }
+        if detectedLimit > 1_000 { return detectedLimit }
+        return 44_000
+    }
+
+    private func claudeProgress(_ snapshot: LiveQuotaSnapshot) -> Double {
+        if let server = snapshot.claudeServer, !server.isStale {
+            return clampedProgress(Double(server.sessionPct) / 100)
+        }
+        guard let usage = snapshot.claudeUsage else { return 0 }
+        return clampedProgress(usage.sessionTokenProgress(planLimit: planLimit))
+    }
+
+    private func claudeResetText(_ snapshot: LiveQuotaSnapshot) -> String {
+        if let server = snapshot.claudeServer,
+           !server.isStale,
+           let reset = server.sessionReset {
+            return compactResetText(reset)
+        }
+        return snapshot.claudeUsage?.resetsInText ?? "—"
+    }
+
+    private func compactResetText(_ reset: Date) -> String {
+        let remainingSeconds = Int(reset.timeIntervalSinceNow)
+        guard remainingSeconds > 0 else { return "Resetting…" }
+        let days = remainingSeconds / 86_400
+        if days == 0 { return ClaudeUsageInfo.resetsInText(from: reset) }
+        let hours = (remainingSeconds % 86_400) / 3_600
+        return hours > 0 ? "Resets in \(days)d \(hours)h" : "Resets in \(days)d"
+    }
+
+    private func freshnessIndicator(isStale: Bool) -> some View {
+        Circle()
+            .fill(isStale ? Color.orange : Color.green.opacity(0.85))
+            .frame(width: 6, height: 6)
+            .help(isStale ? "資料已過期" : "資料為最新")
+    }
+
+    private func quotaBarColor(_ progress: Double) -> Color {
+        progress > 0.85 ? .red : progress > 0.65 ? .orange : Color(nsColor: .controlAccentColor)
+    }
+
+    private func burnRateColor(_ progress: Double) -> Color {
+        progress > 0.95 ? .red : progress > 0.80 ? .orange : .secondary
+    }
+
+    private func clampedProgress(_ progress: Double) -> Double {
+        min(max(progress, 0), 1)
     }
 
     // MARK: KPI row

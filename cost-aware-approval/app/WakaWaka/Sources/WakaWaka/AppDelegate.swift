@@ -823,7 +823,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if dashboardController == nil {
             dashboardController = UsageDashboardWindowController()
         }
-        dashboardController?.present()
+        let snapshot = LiveQuotaSnapshot(
+            claudeUsage: viewModel.sessionStatus,
+            claudeServer: viewModel.claudeUsageInfo,
+            codex: viewModel.codexUsageState
+        )
+        dashboardController?.present(liveQuota: snapshot)
     }
 
     @objc private func togglePopover() {
@@ -861,10 +866,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Animate height change
         // dual-provider usage: title + Claude rows + divider + Codex rows + padding
-        let sessionH: CGFloat = 136
-        // auto-mode bar: divider(1) + row(~17) + vertical padding(16) = ~34
-        let autoModeH: CGFloat = 34
-        // idle: PacMan canvas + "No pending approval" + vertical padding(40)
+        // PopoverFooter (shared by both states): divider + auto row + divider
+        // + Claude 5h bar + Codex 7d bar + vertical padding.
+        let footerH: CGFloat = 120
+        // idle: PacMan canvas + vertical padding
         let idleH: CGFloat = 100
         // "待審批" header: subheadline(~17) + vertical padding(20) + divider(1)
         let queueHeaderH: CGFloat = 38
@@ -873,17 +878,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // inter-row divider
         let queueDividerH: CGFloat = 1
         let expandedDetailH: CGFloat = 340
-        let maxH: CGFloat = 600
+        // Approval list scrolls internally past this cap — mirrors ContentView's
+        // ScrollView `.frame(maxHeight: 440)`, so the footer never gets pushed off.
+        let approvalMaxH: CGFloat = 440
 
-        let chromeH = autoModeH + sessionH
         let targetH: CGFloat
         if pendingQueue.isEmpty {
-            targetH = idleH + chromeH
+            targetH = idleH + footerH
         } else {
             let rowCount = CGFloat(pendingQueue.count)
             let listH = rowCount * queueRowH + max(0, rowCount - 1) * queueDividerH
             let detailH = viewModel.expandedIndex != nil ? expandedDetailH : 0
-            targetH = min(queueHeaderH + listH + detailH + chromeH, maxH)
+            let approvalH = min(listH + detailH, approvalMaxH)
+            targetH = queueHeaderH + approvalH + footerH
         }
 
         if abs(popover.contentSize.height - targetH) > 1 {
