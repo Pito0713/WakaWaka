@@ -169,6 +169,7 @@ enum ParserRunner {
         var sessionPct: Int? = nil
         var sessionReset: Date? = nil
         var weeklyPct: Int? = nil
+        var weeklyReset: Date? = nil
 
         let pctRe   = try! NSRegularExpression(pattern: #"(\d+)% used"#)
         let resetRe = try! NSRegularExpression(pattern: #"resets (.+)$"#)
@@ -188,18 +189,23 @@ enum ParserRunner {
                 }
             }
 
-            if line.hasPrefix("Current week") {
+            // Take the first "Current week" line (all models); it drives the weekly cap.
+            if line.hasPrefix("Current week"), weeklyPct == nil {
                 let ns = line as NSString
                 if let m = pctRe.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
                    let r = Range(m.range(at: 1), in: line) {
                     weeklyPct = Int(line[r])
+                }
+                if let m = resetRe.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
+                   let r = Range(m.range(at: 1), in: line) {
+                    weeklyReset = parseClaudeDate(String(line[r]))
                 }
             }
         }
 
         guard let pct = sessionPct else { return nil }
         return ClaudeUsageInfo(sessionPct: pct, sessionReset: sessionReset,
-                               weeklyPct: weeklyPct, fetchedAt: Date())
+                               weeklyPct: weeklyPct, weeklyReset: weeklyReset, fetchedAt: Date())
     }
 
     /// Parses Claude's reset date strings, e.g. "Jun 20 at 5:50pm (Asia/Taipei)" or "Jun 25 at 10am (UTC)".

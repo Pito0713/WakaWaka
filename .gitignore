@@ -17,3 +17,6 @@ cost-aware-approval/test/
 
 .claude/skills/
 .codex/skills/
+
+# 遷移前備份
+*.pre-migrate.bak

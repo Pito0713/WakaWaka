@@ -156,13 +156,14 @@ test('Codex: sums last_token_usage per event, ignores running total', async () =
   fs.rmSync(ws.dir, { recursive: true, force: true });
 });
 
-test('Codex: costUSD is null while pricing.json codex prices are null', async () => {
+test('Codex: estimates cost using uncached, cached, and output prices', async () => {
   const ws = makeWorkspace(
     [],
-    [codexLine({ ts: '2026-07-23T12:00:00Z', input: 1000, cached: 0, output: 50, reasoning: 0 })]
+    [codexLine({ ts: '2026-07-23T12:00:00Z', input: 1000, cached: 600, output: 50, reasoning: 0 })]
   );
   const day = findDay(await computeDailyUsage(7, ws), '2026-07-23')!;
-  assert.equal(day.agents.codex!.costUSD, null);
+  // 400 uncached × $5/MTok + 600 cached × $0.50/MTok + 50 output × $30/MTok
+  assert.equal(day.agents.codex!.costUSD, 0.0038);
   fs.rmSync(ws.dir, { recursive: true, force: true });
 });
 

@@ -518,6 +518,7 @@ struct ClaudeUsageInfo {
     let sessionPct: Int       // e.g. 67
     let sessionReset: Date?   // parsed from "resets Jun 20 at 5:50pm (Asia/Taipei)"
     let weeklyPct: Int?       // e.g. 10
+    let weeklyReset: Date?    // parsed from the "Current week" line's "resets …"
     let fetchedAt: Date
 
     /// True when the data is older than 11 minutes (one polling interval missed).

@@ -7,12 +7,12 @@
   "cacheReadPerMTok": 0.3,
   "cacheCreationPerMTok": 3.75,
   "codex": {
-    "_note": "Codex/GPT 每 MTok 價格待確認後填入（含抓取日期）。任一價格為 null 時，儀表板 Codex 成本顯示為 — 而非 $0，不進行估算。cachedInputPerMTok 對應 Codex 的 cached_input_tokens。",
-    "_date": null,
-    "model": null,
-    "inputPerMTok": null,
-    "cachedInputPerMTok": null,
-    "outputPerMTok": null,
-    "cacheCreationPerMTok": null
+    "_note": "GPT-5.6 Sol Standard API 每 MTok 基礎價格。來源：https://developers.openai.com/api/docs/models/gpt-5.6-sol（查證於 2026-07-27）。cachedInputPerMTok 對應 Codex 的 cached_input_tokens；cache write 為 uncached input 的 1.25 倍。超過 272K input tokens 的 request 另有長 context 加價，現有每日聚合估算未逐 request 套用。",
+    "_date": "2026-07-27",
+    "model": "gpt-5.6-sol",
+    "inputPerMTok": 5.0,
+    "cachedInputPerMTok": 0.5,
+    "outputPerMTok": 30.0,
+    "cacheCreationPerMTok": 6.25
   }
 }

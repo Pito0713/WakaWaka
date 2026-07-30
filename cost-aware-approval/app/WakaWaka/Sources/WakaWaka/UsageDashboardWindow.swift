@@ -191,6 +191,7 @@ struct UsageDashboardView: View {
 
             if let liveQuota {
                 claudeQuotaRow(liveQuota)
+                claudeWeeklyQuotaRow(liveQuota.claudeServer)
                 codexQuotaRow(liveQuota.codex)
             } else {
                 Text("尚無即時資料")
@@ -222,6 +223,28 @@ struct UsageDashboardView: View {
             }
             quotaProgressBar(progress: progress, percentText: "\(Int(progress * 100))%")
             claudeBurnRate(snapshot.claudeUsage)
+        }
+    }
+
+    /// Weekly (7-day) quota row. Only the server-side `/usage` snapshot reports the
+    /// weekly percentage, so this renders only when that data is present.
+    @ViewBuilder
+    private func claudeWeeklyQuotaRow(_ server: ClaudeUsageInfo?) -> some View {
+        if let server, let weeklyPct = server.weeklyPct {
+            let progress = clampedProgress(Double(weeklyPct) / 100)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text("Claude Weekly").font(.callout.weight(.medium))
+                    freshnessIndicator(isStale: server.isStale)
+                    Spacer()
+                    Text(server.weeklyReset.map(compactResetText) ?? "—")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .id(now)
+                }
+                quotaProgressBar(progress: progress, percentText: "\(weeklyPct)%")
+            }
         }
     }
 

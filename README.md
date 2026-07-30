@@ -341,6 +341,14 @@ P90 偵測在以下情況會有大誤差：
 
 ---
 
+### v0.12.0 — 2026-07-30
+
+#### Added
+
+- **儀表板 Claude Weekly 額度行**：即時額度區在 Claude 5h 之下新增「Claude Weekly」行，顯示 weekly limit 用量 % 與重置倒數。資料來自 server-side `/usage` 快照（`ClaudeUsageInfo.weeklyPct` / 新增 `weeklyReset`）；取不到 weekly 資料時整行隱藏，不顯示假的 0%。
+
+---
+
 ### v0.11.0 — 2026-07-28
 
 #### Changed
