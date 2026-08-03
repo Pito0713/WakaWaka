@@ -341,6 +341,18 @@ P90 偵測在以下情況會有大誤差：
 
 ---
 
+### v0.13.0 — 2026-08-03
+
+#### Added
+
+- **auto mode 開放 claude-in-chrome 唯讀 + loopback**：auto mode 下，`mcp__claude-in-chrome__*` 若同時滿足「名稱含讀取動詞」「名稱不含任何寫入動詞」「`tool_input` 內每個 URL 都是 loopback（`localhost` / `*.localhost` / `127.x.x.x` / `::1`，限 http(s)、不接受帶帳密）」則免審批放行；其餘 MCP 一律維持人工審批。採動詞比對而非硬編 tool 名單，不認得的名稱因缺少讀取動詞而 fail-closed 落回 popover。找不到 URL（例如對當前分頁操作）同樣不放行。
+
+#### Fixed
+
+- **auto 審計紀錄補上 URL**：`appendAutoAudit()` 原本只從 `command` / `file_path` 取 summary，MCP 兩者皆無會記成 `unknown`；改為 fallback 抓取 `tool_input` 中的 URL，自動放行的紀錄事後可查。
+
+---
+
 ### v0.12.0 — 2026-07-30
 
 #### Added

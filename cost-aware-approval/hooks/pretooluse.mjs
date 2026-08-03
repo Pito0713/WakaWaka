@@ -8,6 +8,8 @@
  *   AUTO_ALLOW_TOOLS   — tool names that never need approval (read-only)
  *   SAFE_BASH_PREFIXES — bash command prefixes that are always safe (MEDIUM risk only)
  *   User allowlist     — ~/.wakawaka/allowlist.json  (user-managed MEDIUM bypasses)
+ *   Chrome MCP         — auto mode only: read-only verb + loopback target (see
+ *                        isReadOnlyLoopbackChromeCall); all other MCP needs a human
  *   HIGH / CRITICAL    — always show popover (HIGH) or deny immediately (CRITICAL)
  *
  * Tombstone mechanism (fixes "not showing / can't click" bug):
@@ -218,9 +220,86 @@ function loadAutoMode(agent) {
 // Only these tool categories may be auto-approved. MCP tools (mcp__*) and any
 // other unclassified MEDIUM tool are intentionally excluded — they fall through
 // to the normal pending flow so a human decides. Keep this list narrow.
+// The one exception is the narrow claude-in-chrome opening below.
 const AUTO_ELIGIBLE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
 function isAutoEligible(tool_name) {
   return tool_name === 'Bash' || AUTO_ELIGIBLE_TOOLS.has(tool_name);
+}
+
+// ── Category 4: claude-in-chrome read-only + loopback bypass ─────────────────
+// The browser extension drives a real Chrome session carrying the user's real
+// cookies, so a click there is indistinguishable from the user clicking. Auto
+// mode therefore opens only the smallest useful hole: a read-only action whose
+// target is provably loopback. Everything else keeps going to the popover.
+const CHROME_MCP_PREFIX = 'mcp__claude-in-chrome__';
+
+// Matched on verbs in the tool name rather than an exact tool list, because the
+// server's tool names are not pinned here and a rename must never silently open
+// the hole wider. An unrecognised name carries no read verb → not eligible.
+const CHROME_READ_VERBS  = [
+  'screenshot', 'snapshot', 'read', 'get', 'list',
+  'console', 'content', 'text', 'dom', 'inspect', 'find', 'query',
+];
+// Any of these in the name disqualifies, even alongside a read verb — a name
+// like `get_page_and_click` must not slip through on its `get`.
+const CHROME_WRITE_VERBS = [
+  'click', 'type', 'fill', 'input', 'submit', 'form', 'press', 'key',
+  'navigate', 'goto', 'open', 'close', 'reload', 'back', 'forward',
+  'execute', 'eval', 'script', 'inject',
+  'upload', 'download', 'create', 'delete', 'remove', 'set', 'update', 'write',
+  'drag', 'hover', 'select', 'focus', 'scroll', 'resize',
+  'cookie', 'storage', 'credential', 'permission',
+];
+
+/** Collect every absolute URL appearing anywhere in a tool input. */
+function collectUrls(value, out = [], depth = 0) {
+  if (depth > 6 || out.length > 50) return out;
+  if (typeof value === 'string') {
+    const found = value.match(/[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s"'`<>\\]+/g);
+    if (found) out.push(...found);
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectUrls(item, out, depth + 1);
+  } else if (value && typeof value === 'object') {
+    for (const item of Object.values(value)) collectUrls(item, out, depth + 1);
+  }
+  return out;
+}
+
+/** True only for http(s) URLs pointing at the loopback interface. */
+function isLoopbackUrl(raw) {
+  let parsed;
+  try { parsed = new URL(raw); } catch { return false; }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  // `http://localhost@evil.com/` parses to host evil.com, so the parser already
+  // handles that trick; embedded credentials are rejected outright anyway.
+  if (parsed.username !== '' || parsed.password !== '') return false;
+
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host === '::1') return true;
+
+  const octets = host.split('.');
+  if (octets.length !== 4) return false;
+  if (!octets.every((o) => /^\d{1,3}$/.test(o) && Number(o) <= 255)) return false;
+  return octets[0] === '127';
+}
+
+/**
+ * Auto mode's only MCP opening: a claude-in-chrome read whose target is
+ * verifiably loopback. Fail-closed on every axis — a tool that acts on
+ * "the current tab" carries no URL, so its target cannot be verified and it
+ * stays behind the popover.
+ */
+function isReadOnlyLoopbackChromeCall(tool_name, tool_input) {
+  if (typeof tool_name !== 'string' || !tool_name.startsWith(CHROME_MCP_PREFIX)) return false;
+
+  const action = tool_name.slice(CHROME_MCP_PREFIX.length).toLowerCase();
+  if (!CHROME_READ_VERBS.some((verb) => action.includes(verb)))  return false;
+  if (CHROME_WRITE_VERBS.some((verb) => action.includes(verb)))  return false;
+
+  const urls = collectUrls(tool_input);
+  if (urls.length === 0) return false;
+  return urls.every(isLoopbackUrl);
 }
 
 /**
@@ -238,7 +317,15 @@ function appendAutoAudit(agent, tool_name, tool_input) {
       summary = firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine;
     } else {
       const filePath = tool_input?.file_path;
-      summary = filePath ? `${tool_name} ${filePath}` : String(tool_name ?? 'unknown');
+      if (filePath) {
+        summary = `${tool_name} ${filePath}`;
+      } else {
+        // MCP calls carry neither command nor file_path; the URL is the only
+        // thing that makes the entry reviewable after the fact.
+        const [url] = collectUrls(tool_input);
+        summary = url ? `${tool_name} ${url}` : String(tool_name ?? 'unknown');
+      }
+      if (summary.length > 200) summary = `${summary.slice(0, 200)}…`;
     }
 
     const entry = {
@@ -404,10 +491,13 @@ async function main() {
   // ── Step 2.5: Auto mode — MEDIUM auto-approved when user enabled it ──────
   // HIGH and CRITICAL never reach this branch — they always fall through to
   // Step 3 and require an explicit human decision, regardless of auto mode.
-  // Only auto-eligible tools (Bash / Edit / Write / MultiEdit) qualify; MCP and
-  // other unclassified MEDIUM tools fall through to human review.
+  // Only auto-eligible tools (Bash / Edit / Write / MultiEdit) qualify, plus the
+  // narrow claude-in-chrome opening (read-only verb + loopback target); every
+  // other MCP and unclassified MEDIUM tool falls through to human review.
   // Fail-closed: if the audit record can't be written, do NOT auto-approve.
-  if (risk_level === 'medium' && isAutoEligible(tool_name) && loadAutoMode(AGENT_NAME)) {
+  const autoEligible = isAutoEligible(tool_name)
+    || isReadOnlyLoopbackChromeCall(tool_name, tool_input);
+  if (risk_level === 'medium' && autoEligible && loadAutoMode(AGENT_NAME)) {
     if (appendAutoAudit(AGENT_NAME, tool_name, tool_input)) {
       decide('allow', 'Auto mode: medium auto-approved');
       process.exit(0);

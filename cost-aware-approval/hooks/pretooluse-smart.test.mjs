@@ -798,3 +798,148 @@ test('fail-closed: audit write fails → no auto-allow, writes pending instead',
   try { fs.unlinkSync(blockerFile); } catch { /* ok */ }
   resetAutoSettings();
 });
+
+// ── Round 3: claude-in-chrome read-only + loopback opening ───────────────────
+// Auto mode's only MCP bypass. Every case that is not "read verb + provably
+// loopback target" must still land in the popover.
+
+const CHROME = 'mcp__claude-in-chrome__';
+
+/**
+ * Run one chrome tool call under auto mode; resolve what the hook decided.
+ * Races "pending file appears" against "hook exited" rather than sleeping a
+ * fixed interval — a real WakaWaka instance may be running against the same
+ * state dir and consuming pending files, which makes a single poll flaky.
+ */
+async function runChromeUnderAutoMode(sid, tool_name, tool_input, autoModeEnabled = true) {
+  cleanupSession(sid);
+  resetAutoSettings();
+  resetAutoAudit();
+  writeAutoSettings({ autoMode: { 'claude-code': { enabled: autoModeEnabled, expiresAt: null } } });
+
+  let exited = false;
+  const hookPromise = runHook(
+    { session_id: sid, tool_name, tool_input },
+    { ...AUTO_ENV, APP_DEAD_GRACE_MS: '3000', APP_CHECK_EVERY_MS: '0' },
+  ).then((r) => { exited = true; return r; });
+
+  let wentToPopover = false;
+  for (let waited = 0; waited < 8000; waited += 25) {
+    if (fs.existsSync(pendingPath(sid))) { wentToPopover = true; break; }
+    if (exited) break;                     // hook finished without ever pending
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  if (wentToPopover) fs.writeFileSync(decisionPath(sid), JSON.stringify({ decision: 'allow' }));
+  const result = await hookPromise;
+
+  const audit = readAuditEntries();
+  resetAutoSettings();
+  resetAutoAudit();
+  cleanupSession(sid);
+  return { wentToPopover, audit, decision: parseDecision(result.stdout) };
+}
+
+test('auto mode + chrome read verb + localhost → auto-allow, no pending, audit records the URL', async () => {
+  const { wentToPopover, audit, decision } = await runChromeUnderAutoMode(
+    'test-chrome-read-localhost',
+    `${CHROME}get_page_text`,
+    { url: 'http://localhost:5173/dashboard' },
+  );
+  assert.equal(wentToPopover, false, 'read-only loopback call must not need approval');
+  assert.equal(decision, 'allow');
+  assert.equal(audit.length, 1, 'auto-approved chrome call must be audited');
+  assert.match(audit[0].summary, /localhost:5173/, 'audit summary must carry the URL');
+});
+
+test('auto mode + chrome read verb + 127.0.0.1 / ::1 / *.localhost → auto-allow', async () => {
+  for (const [i, url] of [
+    'http://127.0.0.1:3000/',
+    'http://[::1]:8080/health',
+    'http://app.localhost:4000/',
+  ].entries()) {
+    const { wentToPopover } = await runChromeUnderAutoMode(
+      `test-chrome-loopback-${i}`, `${CHROME}read_console_logs`, { url },
+    );
+    assert.equal(wentToPopover, false, `${url} must be treated as loopback`);
+  }
+});
+
+test('auto mode + chrome read verb + remote URL → popover, no audit', async () => {
+  const { wentToPopover, audit } = await runChromeUnderAutoMode(
+    'test-chrome-read-remote',
+    `${CHROME}get_page_text`,
+    { url: 'https://mail.google.com/' },
+  );
+  assert.equal(wentToPopover, true, 'a read off loopback still needs a human');
+  assert.equal(audit.length, 0);
+});
+
+test('auto mode + chrome read verb + no URL in input → popover (target unverifiable)', async () => {
+  const { wentToPopover } = await runChromeUnderAutoMode(
+    'test-chrome-no-url', `${CHROME}take_screenshot`, { tabId: 7 },
+  );
+  assert.equal(wentToPopover, true, 'current-tab reads carry no verifiable target');
+});
+
+test('auto mode + chrome write verbs on localhost → popover, no audit', async () => {
+  for (const [i, action] of [
+    'click_element', 'navigate_to', 'fill_form', 'execute_script', 'set_cookie',
+  ].entries()) {
+    const { wentToPopover, audit } = await runChromeUnderAutoMode(
+      `test-chrome-write-${i}`, `${CHROME}${action}`, { url: 'http://localhost:5173/' },
+    );
+    assert.equal(wentToPopover, true, `${action} must never auto-pass`);
+    assert.equal(audit.length, 0);
+  }
+});
+
+test('auto mode + chrome name mixing read and write verbs → popover', async () => {
+  const { wentToPopover } = await runChromeUnderAutoMode(
+    'test-chrome-mixed', `${CHROME}get_element_and_click`, { url: 'http://localhost:5173/' },
+  );
+  assert.equal(wentToPopover, true, 'a write verb must veto the read verb');
+});
+
+test('auto mode + chrome read verb + host that only looks loopback → popover', async () => {
+  for (const [i, url] of [
+    'http://localhost.evil.com/',        // subdomain trick
+    'http://127.0.0.1.evil.com/',        // suffix trick
+    'http://localhost@evil.com/',        // credential trick — real host is evil.com
+    'http://127.999.1.1/',               // not a valid loopback octet
+    'file:///etc/passwd',                // not http(s)
+  ].entries()) {
+    const { wentToPopover } = await runChromeUnderAutoMode(
+      `test-chrome-spoof-${i}`, `${CHROME}get_page_text`, { url },
+    );
+    assert.equal(wentToPopover, true, `${url} must not be accepted as loopback`);
+  }
+});
+
+test('auto mode + chrome read verb + one loopback and one remote URL → popover', async () => {
+  const { wentToPopover } = await runChromeUnderAutoMode(
+    'test-chrome-mixed-urls',
+    `${CHROME}get_page_content`,
+    { url: 'http://localhost:5173/', referrer: 'https://evil.com/' },
+  );
+  assert.equal(wentToPopover, true, 'every URL in the input must be loopback');
+});
+
+test('chrome read verb + localhost but auto mode OFF → popover', async () => {
+  const { wentToPopover, audit } = await runChromeUnderAutoMode(
+    'test-chrome-auto-off',
+    `${CHROME}get_page_text`,
+    { url: 'http://localhost:5173/' },
+    false,
+  );
+  assert.equal(wentToPopover, true, 'the opening exists only while auto mode is on');
+  assert.equal(audit.length, 0);
+});
+
+test('auto mode + non-chrome MCP server with a read verb + localhost → popover', async () => {
+  const { wentToPopover } = await runChromeUnderAutoMode(
+    'test-chrome-other-server',
+    'mcp__some_other_server__get_page_text',
+    { url: 'http://localhost:5173/' },
+  );
+  assert.equal(wentToPopover, true, 'the opening is scoped to claude-in-chrome only');
+});
