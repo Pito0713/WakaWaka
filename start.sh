@@ -34,7 +34,30 @@ else
   ok "Binary 已存在（加 --build 可強制重新 build）"
 fi
 
-# ── Step 2: 重啟 WakaWaka ────────────────────────────────────
+# ── Step 2: 還原 menubar skin ────────────────────────────────
+# SkinManager 只在啟動時掃描 ~/.wakawaka/skins，所以這步必須排在重啟之前，
+# 首次安裝才能在同一次執行就載入到圖。以 idle_0.png 當基準幀判斷是否已安裝
+# ——SkinManager 也是用它決定一個 skin 算不算存在。
+#
+# 用 cp -Rn（no-clobber）而非 cp -R：基準幀缺失但其他檔還在時（使用者改圖改壞、
+# 或誤刪），-R 會連同使用者自己畫的圖一起蓋回原版。-n 只補真正缺的檔，
+# 兩條路徑的語義因此一致——這個腳本只會補檔，永遠不覆寫既有的圖。
+SKIN_SRC="$APP_DIR/skins/arcade"
+SKIN_DEST="$HOME/.wakawaka/skins"
+
+if [[ -f "$SKIN_DEST/arcade/idle_0.png" ]]; then
+  ok "menubar skin 已安裝（略過）"
+elif [[ -d "$SKIN_SRC" ]]; then
+  mkdir -p "$SKIN_DEST"
+  cp -Rn "$SKIN_SRC" "$SKIN_DEST/" || true   # -n 跳過既有檔時可能回傳非 0，不算失敗
+  ok "menubar skin 已還原至 $SKIN_DEST/arcade"
+else
+  # ${} 不可省略：全形逗號緊接變數時，bash 會把它的首個 byte 併進變數名，
+  # set -u 下會變成 unbound variable 直接中斷。
+  warn "找不到 ${SKIN_SRC}，menubar 將使用內建繪製圖示"
+fi
+
+# ── Step 3: 重啟 WakaWaka ────────────────────────────────────
 if pgrep -x WakaWaka &>/dev/null; then
   pkill -x WakaWaka 2>/dev/null || true
   sleep 0.5
@@ -50,7 +73,7 @@ else
   fail "WakaWaka 啟動失敗，請執行 swift build 確認無錯誤"
 fi
 
-# ── Step 3: 寫入 Claude Code hook（並清理舊路徑）────────────
+# ── Step 4: 寫入 Claude Code hook（並清理舊路徑）────────────
 mkdir -p "$HOME/.claude"
 [[ -f "$CLAUDE_SETTINGS" ]] || echo '{}' > "$CLAUDE_SETTINGS"
 

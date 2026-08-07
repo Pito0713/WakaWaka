@@ -341,6 +341,15 @@ P90 偵測在以下情況會有大誤差：
 
 ---
 
+### v0.13.1 — 2026-08-07
+
+#### Fixed
+
+- **`start.sh` 自動還原 menubar skin**：新增 Step 2，啟動時若 `~/.wakawaka/skins/arcade/idle_0.png` 不存在就從 repo 複製一份（判準與 `SkinManager` 認定 skin 是否存在的條件一致）。此步排在重啟之前，首次安裝同一次執行即可載入。原本這是 `skins/README.md` 裡的手動指令，家目錄一被清掉就會退回內建繪製圖示。採 `cp -Rn`（no-clobber）：基準幀缺失但其他檔仍在時只補缺的檔，不覆寫使用者改過的圖。
+- **`start.sh` 在缺少 skin 來源時會中斷**：警告訊息中全形逗號緊接變數（`$SKIN_SRC，`），bash 會將逗號首個 byte 併入變數名，`set -u` 下觸發 unbound variable 而非正常 warn。改用 `${SKIN_SRC}` 界定。
+
+---
+
 ### v0.13.0 — 2026-08-03
 
 #### Added
