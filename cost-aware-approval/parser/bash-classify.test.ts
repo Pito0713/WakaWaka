@@ -197,7 +197,16 @@ test('mutating flags demote otherwise read-only commands', () => {
 });
 
 test('tee writes, so it is never understand', () => {
-  assertPhase('printf x | tee out', 'other');
+  const result = assertPhase('printf x | tee out', 'other');
+  // The diagnostic must name the writer, not the reading segment that happened
+  // to outrank it — otherwise `echo` tops unknownBash and misdirects the reader.
+  assert.equal(result.head, 'tee');
+});
+
+test('a runtime becomes a test runner only with --test', () => {
+  assertPhase('npx tsx --test parser/*.test.ts', 'verify');
+  assertPhase('node --test', 'verify');
+  assertPhase('node build.js', 'other');
 });
 
 test('polymorphic git subcommands are not blanket read-only', () => {
@@ -220,4 +229,30 @@ test('gh matches noun+verb positionally', () => {
 test('a subshell is classified by its contents', () => {
   assertPhase('(cat x; pytest)', 'verify');
   assertPhase('(cd app && npm test)', 'verify');
+});
+
+test('commands inside one-line conditionals and loops are still classified', () => {
+  // `then`/`do` prefix a real command. Dropping those segments as punctuation
+  // loses the command entirely — a worse error than the `}` it was fixing.
+  assertPhase('if true; then pytest; fi', 'verify');
+  assertPhase('for f in *.ts; do pytest "$f"; done', 'verify');
+  assertPhase('while read l; do cat "$l"; done', 'understand');
+  assertPhase('if [ -f x ]; then echo hi; else pytest; fi', 'verify');
+});
+
+test('a runtime test flag after the script belongs to the script', () => {
+  // `node app.js --test` passes --test to the app; it is not a test run.
+  assertPhase('node app.js --test', 'other');
+  assertPhase('node --test app.js', 'verify');
+});
+
+test('shell punctuation is not reported as an unknown command', () => {
+  // `{ a; b; }` splits on its own semicolons; the trailing brace is a segment
+  // whose head would otherwise show up as `}` in the unknownBash diagnostic.
+  const braces = classifyBash('{ cat x; pytest; }');
+  assert.equal(braces.phase, 'verify');
+  assert.notEqual(braces.head, '}');
+
+  const loop = classifyBash('for f in *.ts; do cat "$f"; done');
+  assert.notEqual(loop.head, 'done');
 });

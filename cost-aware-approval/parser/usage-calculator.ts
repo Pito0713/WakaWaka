@@ -1,7 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as readline from 'readline';
 import { fileURLToPath } from 'url';
+import {
+  dedupKey,
+  eachJSONLine,
+  scanForJSONL,
+  timestampMs,
+  TranscriptDedup,
+} from './transcript-scan.js';
 import {
   addClaudeTokens,
   claudeCost,
@@ -137,9 +143,6 @@ export interface UsageScan extends UsageSnapshot {
 }
 
 export async function calculateUsage(transcriptPath: string): Promise<UsageScan> {
-  const fileStream = fs.createReadStream(transcriptPath);
-  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
   // ── Pass 1: collect & deduplicate ──────────────────────────────────────────
   // Key: `${requestId}|${message.id}` — keeps the LAST occurrence (latest state
   // of a streaming response is the most complete).
@@ -149,17 +152,7 @@ export async function calculateUsage(transcriptPath: string): Promise<UsageScan>
   let humanSeq = 0;
   let nokeySeq  = 0; // independent counter for entries that lack requestId+msgId
 
-  for await (const line of rl) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    let obj: Record<string, unknown>;
-    try {
-      obj = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-
+  await eachJSONLine(transcriptPath, (obj) => {
     const tsRaw = typeof obj.timestamp === 'string' ? obj.timestamp : '';
     const tsMs  = tsRaw ? new Date(tsRaw).getTime() : NaN;
 
@@ -183,26 +176,18 @@ export async function calculateUsage(transcriptPath: string): Promise<UsageScan>
           isHumanTurn:  true,
         });
       }
-      continue; // human entries never carry usage
+      return; // human entries never carry usage
     }
 
     const row = extractUsage(obj);
-    if (!row) continue;
+    if (!row) return;
     const delta = row.point;
 
-    const requestId = typeof obj.requestId === 'string' ? obj.requestId : '';
-    const msgId     = (obj.message as Record<string, unknown> | undefined)?.id;
-    const msgIdStr  = typeof msgId === 'string' ? msgId : '';
+    // Records lacking either id get a unique sentinel so they are never merged.
+    const key = dedupKey(obj, () => nokeySeq++);
 
-    // Dedup key: if we have both IDs use them; otherwise assign a unique sentinel.
-    // Using a dedicated counter (nokeySeq) mirrors p90-detector.ts and is clearer
-    // than relying on dedupMap.size, which can stay flat when a duplicate key is
-    // overwritten (making the pattern harder to reason about).
-    const key = requestId && msgIdStr
-      ? `${requestId}|${msgIdStr}`
-      : `__nokey_${nokeySeq++}`;
-
-    // Always overwrite → last-seen wins (final streaming value is most complete)
+    // Always overwrite → last-seen wins (final streaming value is most complete).
+    // A single file is read in order, so file order is the write order.
     dedupMap.set(key, {
       tsMs:         Number.isNaN(tsMs) ? 0 : tsMs,
       timestampISO: tsRaw,
@@ -211,7 +196,7 @@ export async function calculateUsage(transcriptPath: string): Promise<UsageScan>
       tokens:       row.tokens,
       isHumanTurn: false,
     });
-  }
+  });
 
   // ── Sort deduplicated entries by timestamp ─────────────────────────────────
   const entries = Array.from(dedupMap.values()).sort((a, b) => a.tsMs - b.tsMs);
@@ -321,18 +306,6 @@ export async function calculateUsage(transcriptPath: string): Promise<UsageScan>
 
 // ── Multi-file aggregation ────────────────────────────────────────────────────
 
-function scanForJSONL(dir: string): string[] {
-  const files: string[] = [];
-  try {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) files.push(...scanForJSONL(full));
-      else if (entry.name.endsWith('.jsonl')) files.push(full);
-    }
-  } catch { /* skip */ }
-  return files;
-}
-
 /**
  * Merge all entries from multiple JSONL files into a single unified timeline
  * and detect the current 5-hour window with a sliding cutoff (`now − 5h`),
@@ -363,65 +336,41 @@ async function computeGlobalSession(files: string[]): Promise<{
     out: number; inp: number; cr: number; cw: number;
     model: string;
     tokens: ClaudeTokens;
-    /** `<file path>:<line>` — deterministic tie-break for equal timestamps. */
-    order: string;
   }
 
-  // Pass 1: read all files, dedup across the entire corpus
-  const dedup = new Map<string, GEntry>();
-  let nokey = 0;
-
-  /**
-   * Files are read in parallel, so "last write wins" would mean "whichever
-   * stream happened to finish last" — the same corpus could then produce
-   * different totals on consecutive runs. Order by timestamp instead, with
-   * (file path, line number) as a stable tie-break for the common case where
-   * duplicates share a timestamp.
-   */
-  const keep = (key: string, next: GEntry): void => {
-    const prev = dedup.get(key);
-    if (!prev || next.tsMs > prev.tsMs || (next.tsMs === prev.tsMs && next.order >= prev.order)) {
-      dedup.set(key, next);
-    }
-  };
+  // Pass 1: read all files, dedup across the entire corpus. Files are read in
+  // parallel, so the survivor is chosen by timestamp rather than by whichever
+  // stream finished last — see TranscriptDedup.
+  const dedup = new TranscriptDedup<GEntry>();
 
   await Promise.all(files.map(async (file) => {
-    let lineNo = 0;
     try {
-      const fileStream = fs.createReadStream(file);
-      const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-      for await (const line of rl) {
-        lineNo++;
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        let obj: Record<string, unknown>;
-        try { obj = JSON.parse(trimmed); } catch { continue; }
-
-        if (typeof obj.timestamp !== 'string') continue;
-        const tsMs = new Date(obj.timestamp).getTime();
-        if (Number.isNaN(tsMs)) continue;
+      await eachJSONLine(file, (obj, lineNo) => {
+        const tsMs = timestampMs(obj);
+        if (Number.isNaN(tsMs)) return;
 
         // Accept entries with a usage field — including out=0 entries which
         // anchor the session window start (same rule as calculateUsage).
         const row = extractUsage(obj);
-        if (!row) continue;
+        if (!row) return;
 
-        const out = Math.max(0, row.point.output);
-        const inp = Math.max(0, row.point.input);
-        const cr  = Math.max(0, row.point.cacheRead);
-        const cw  = Math.max(0, row.point.cacheCreation);
-
-        const requestId = typeof obj.requestId === 'string' ? obj.requestId : '';
-        const msgId     = (obj.message as Record<string, unknown>)?.id;
-        const msgIdStr  = typeof msgId === 'string' ? msgId : '';
-        const key = requestId && msgIdStr ? `${requestId}|${msgIdStr}` : `__nokey_${nokey++}`;
-
-        keep(key, {
-          tsMs, timestampISO: obj.timestamp, out, inp, cr, cw,
-          model: row.model, tokens: row.tokens,
-          order: `${file}:${String(lineNo).padStart(9, '0')}`,
-        });
-      }
+        dedup.offer(
+          dedupKey(obj, dedup.nextSeq),
+          {
+            tsMs,
+            timestampISO: obj.timestamp as string,
+            out: row.point.output,
+            inp: row.point.input,
+            cr: row.point.cacheRead,
+            cw: row.point.cacheCreation,
+            model: row.model,
+            tokens: row.tokens,
+          },
+          tsMs,
+          file,
+          lineNo
+        );
+      });
     } catch { /* skip unreadable files */ }
   }));
 

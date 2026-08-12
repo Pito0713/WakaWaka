@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "_note": "工具 → 活動階段的預設對照。versioned 是為了讓日後新增 mapping 不會默默改變歷史報表的語義。未列出的工具一律落 other 並列入 unclassifiedTools 診斷 —— 猜測會產生看似精確的錯誤分類，缺口至少看得見也修得掉。",
+  "_phases": "understand（理解／蒐集）｜develop（產出變更）｜verify（測試／建置／檢查）｜other（判不出來）。reply 不在此表：它的定義是「整個回應沒有任何 tool_use」，由呼叫端判定。",
+  "_bashNote": "Bash 不在此表，由 bash-classify.ts 解析指令內容決定（見 phase-usage-plan.md §4.2）。",
+  "tools": {
+    "Read": "understand",
+    "NotebookRead": "understand",
+    "Grep": "understand",
+    "Glob": "understand",
+    "LS": "understand",
+    "WebFetch": "understand",
+    "WebSearch": "understand",
+    "Task": "understand",
+    "Agent": "understand",
+    "TodoRead": "understand",
+
+    "Edit": "develop",
+    "MultiEdit": "develop",
+    "Write": "develop",
+    "NotebookEdit": "develop",
+    "apply_patch": "develop"
+  },
+  "patterns": [
+    {
+      "prefix": "mcp__claude-in-chrome__",
+      "phase": "other",
+      "_why": "實測這類呼叫佔 11.7%，在來源 session 中其實是驗證（開瀏覽器測 UI），但工具名稱無從得知意圖 —— 同一組工具也可能用於純瀏覽。標為 other 並讓 unclassifiedTools 顯示量級，等有可靠訊號再改。"
+    }
+  ]
+}

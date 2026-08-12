@@ -8,6 +8,7 @@ import { calculateUsage, bucketCost } from './usage-calculator.js';
 import {
   loadPricing, emptyClaudeTokens, claudeModelPricing, splitCacheCreation, type ClaudeTokens,
 } from './pricing.js';
+import { TranscriptDedup } from './transcript-scan.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(__dirname, 'fixtures', 'sample.jsonl');
@@ -151,6 +152,33 @@ test('splitCacheCreation: the two TTL halves always sum to the billed total', ()
     assert.equal(cacheWrite5m + cacheWrite1h, total, `sum must equal total for ${JSON.stringify(usage)}`);
     assert.ok(cacheWrite5m >= 0 && cacheWrite1h >= 0, 'neither half may be negative');
   }
+});
+
+test('TranscriptDedup: a usable timestamp always beats an unusable one', () => {
+  // Every comparison against NaN is false, so a naive check lets whichever
+  // NaN-stamped record arrived first hold the slot forever.
+  const nanFirst = new TranscriptDedup<string>();
+  nanFirst.offer('k', 'no-timestamp', NaN, 'f', 1);
+  nanFirst.offer('k', 'timestamped', 1000, 'f', 2);
+  assert.deepEqual(nanFirst.values(), ['timestamped']);
+
+  const nanSecond = new TranscriptDedup<string>();
+  nanSecond.offer('k', 'timestamped', 1000, 'f', 1);
+  nanSecond.offer('k', 'no-timestamp', NaN, 'f', 2);
+  assert.deepEqual(nanSecond.values(), ['timestamped'], 'arrival order must not matter');
+});
+
+test('TranscriptDedup: newest timestamp wins regardless of read order', () => {
+  const forward = new TranscriptDedup<string>();
+  forward.offer('k', 'old', 100, 'a.jsonl', 1);
+  forward.offer('k', 'new', 200, 'b.jsonl', 1);
+
+  const reverse = new TranscriptDedup<string>();
+  reverse.offer('k', 'new', 200, 'b.jsonl', 1);
+  reverse.offer('k', 'old', 100, 'a.jsonl', 1);
+
+  assert.deepEqual(forward.values(), ['new']);
+  assert.deepEqual(reverse.values(), ['new'], 'parallel reads must not change the winner');
 });
 
 test('splitCacheCreation: corrupt negative counts clamp to zero, never negative cost', () => {

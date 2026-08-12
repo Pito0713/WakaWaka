@@ -18,11 +18,17 @@
  * Usage:  npx tsx daily-usage.ts [--days N]   (default N = 7)
  */
 
-import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import * as readline from 'readline';
 import { fileURLToPath } from 'url';
+import {
+  dedupKey,
+  eachJSONLine,
+  recentFiles,
+  timestampMs,
+  toInt,
+  TranscriptDedup,
+} from './transcript-scan.js';
 import {
   addClaudeTokens,
   claudeCost,
@@ -106,63 +112,6 @@ function buildDateAxis(days: number, now: Date): string[] {
   return axis;
 }
 
-// ── File discovery ────────────────────────────────────────────────────────────
-
-function scanForJSONL(dir: string): string[] {
-  const files: string[] = [];
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return files; // missing dir → agent simply absent (plan §6: no error)
-  }
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) files.push(...scanForJSONL(full));
-    else if (entry.name.endsWith('.jsonl')) files.push(full);
-  }
-  return files;
-}
-
-/** Files whose mtime is too old to hold any entry in the window are skipped. */
-function recentFiles(dir: string, periodStartMs: number): string[] {
-  const cutoff = periodStartMs - FILE_MTIME_BUFFER_MS;
-  return scanForJSONL(dir).filter((f) => {
-    try {
-      return fs.statSync(f).mtimeMs >= cutoff;
-    } catch {
-      return false;
-    }
-  });
-}
-
-async function eachLine(file: string, fn: (obj: Record<string, unknown>) => void): Promise<void> {
-  const rl = readline.createInterface({
-    input: fs.createReadStream(file),
-    crlfDelay: Infinity,
-  });
-  try {
-    for await (const line of rl) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      let obj: Record<string, unknown>;
-      try {
-        obj = JSON.parse(trimmed);
-      } catch {
-        continue;
-      }
-      fn(obj);
-    }
-  } finally {
-    rl.close();
-  }
-}
-
-function toInt(v: unknown): number {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.floor(n) : 0;
-}
-
 // ── Claude Code aggregation ───────────────────────────────────────────────────
 
 /** Model id used when a transcript row carries usage but names no model. */
@@ -206,30 +155,21 @@ function readClaudeRow(obj: Record<string, unknown>, dates: Set<string>): Claude
   return { date, model, tokens: claudeTokensFromUsage(usage) };
 }
 
-function dedupKey(obj: Record<string, unknown>, nokeySeq: () => number): string {
-  const requestId = typeof obj.requestId === 'string' ? obj.requestId : '';
-  const msgId = (obj.message as Record<string, unknown> | undefined)?.id;
-  const msgIdStr = typeof msgId === 'string' ? msgId : '';
-  return requestId && msgIdStr ? `${requestId}|${msgIdStr}` : `__nokey_${nokeySeq()}`;
-}
-
 async function aggregateClaude(
   dir: string,
   dates: Set<string>,
   periodStartMs: number
 ): Promise<ClaudeScan> {
-  const files = recentFiles(dir, periodStartMs);
+  const files = recentFiles(dir, periodStartMs - FILE_MTIME_BUFFER_MS);
 
   // Global dedup across all files: the same API response is written to the
-  // JSONL repeatedly as it streams, and last-write-wins is the complete state.
-  const dedup = new Map<string, ClaudeEntry>();
-  let seq = 0;
-  const nextSeq = () => seq++;
+  // JSONL repeatedly as it streams, and the last state is the complete one.
+  const dedup = new TranscriptDedup<ClaudeEntry>();
 
   for (const file of files) {
-    await eachLine(file, (obj) => {
+    await eachJSONLine(file, (obj, lineNo) => {
       const entry = readClaudeRow(obj, dates);
-      if (entry) dedup.set(dedupKey(obj, nextSeq), entry);
+      if (entry) dedup.offer(dedupKey(obj, dedup.nextSeq), entry, timestampMs(obj), file, lineNo);
     });
   }
 
@@ -264,11 +204,11 @@ async function aggregateCodex(
   dates: Set<string>,
   periodStartMs: number
 ): Promise<Map<string, CodexAcc>> {
-  const files = recentFiles(dir, periodStartMs);
+  const files = recentFiles(dir, periodStartMs - FILE_MTIME_BUFFER_MS);
   const daily = new Map<string, CodexAcc>();
 
   for (const file of files) {
-    await eachLine(file, (obj) => {
+    await eachJSONLine(file, (obj) => {
       const payload = obj.payload as Record<string, unknown> | undefined;
       if (!payload || payload.type !== 'token_count') return;
       const info = payload.info as Record<string, unknown> | undefined;
