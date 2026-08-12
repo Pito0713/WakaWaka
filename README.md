@@ -214,6 +214,44 @@ cd WakaWaka
 
 ---
 
+## 測試
+
+```bash
+# Swift（menubar app）
+cd cost-aware-approval/app/WakaWaka && swift test
+
+# TypeScript parser
+cd cost-aware-approval/parser && npx tsx --test *.test.ts
+
+# Node hooks
+node --test cost-aware-approval/hooks/*.test.mjs
+```
+
+### Swift 測試用 swift-testing，不用 XCTest
+
+**不要把 `import Testing` 改回 `import XCTest`。** XCTest 隨 Xcode 一起安裝，而
+`Testing.framework` 隨 Command Line Tools 一起安裝。本專案只需要 CLT 即可開發，
+改用 XCTest 會讓沒裝 Xcode 的機器完全跑不了 `swift test`（症狀是
+`error: no such module 'XCTest'`，且 `swift build` 正常、只有測試爆掉）。
+
+對照表（若需手動遷移其他測試）：
+
+| XCTest | swift-testing |
+|---|---|
+| `class X: XCTestCase` | `struct X` |
+| `func testFoo()` | `@Test func foo()` |
+| `XCTAssertEqual(a, b)` | `#expect(a == b)` |
+| `XCTAssertTrue/False(x)` | `#expect(x)` / `#expect(!x)` |
+| `XCTAssertNil/NotNil(x)` | `#expect(x == nil)` / `#expect(x != nil)` |
+| `try XCTUnwrap(x)` | `try #require(x)` |
+| `XCTFail("m")` | `Issue.record("m")` |
+| `addTeardownBlock { … }` | `defer { … }`（無對應 API） |
+
+一個行為差異值得注意：**swift-testing 預設平行執行測試**（XCTest 預設序列）。
+會碰檔案系統的測試必須用各自獨立的路徑（本專案一律用 UUID 命名的暫存目錄）。
+
+---
+
 ## 檔案路徑規範
 
 所有 runtime 檔案統一存放於 `~/.wakawaka/`：
@@ -338,6 +376,38 @@ P90 偵測在以下情況會有大誤差：
 ## Changelog
 
 版本格式：`v主版本.功能版本.修補版本`，遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/) 規範。
+
+---
+
+### v0.15.1 — 2026-08-12
+
+#### Changed
+
+- **Swift 測試改用 swift-testing，不再依賴 XCTest**：XCTest 隨 Xcode 安裝，`Testing.framework` 隨 Command Line Tools 安裝。本專案只需 CLT 即可開發，但既有測試 `import XCTest`，在沒裝 Xcode 的機器上 `swift test` 直接失敗（`no such module 'XCTest'`；`swift build` 正常，只有測試爆掉）。20 個測試全數遷移，`swift test` 不需任何旗標即可執行。
+- **`addTeardownBlock` 改為 `defer`**：swift-testing 無對應 API。另注意 swift-testing **預設平行執行**（XCTest 預設序列），會碰檔案系統的測試改用各自獨立的 UUID 暫存目錄。README 新增「測試」章節，含遷移對照表與「不要改回 XCTest」的說明。
+
+---
+
+### v0.15.0 — 2026-08-12
+
+對應 `phase-usage-plan.md` 階段 2（共用掃描模組）與階段 3（活動分佈報表主體）。
+
+#### Added
+
+- **`parser/transcript-scan.ts`**：JSONL 探索、逐行讀取、dedup key 與 `TranscriptDedup` 去重累加器的單一實作，取代原本散在 `daily-usage.ts` 與 `usage-calculator.ts` 的兩份副本（`phase-usage` 會是第三份）。勝出者以 `(timestamp, 檔案, 行號)` 決定，平行讀檔不再影響結果。
+- **`parser/phase-usage.ts` + `phase-scan.ts` + `phase-classify.ts` + `tool-phases.json`**：把每次 API 呼叫分入 理解／開發／驗證／回覆／其他 五桶。歸屬單位為 `(requestId, message.id)`：usage 取最新一筆，**工具內容取所有同鍵記錄的聯集** —— 早期 streaming 寫入尚未產生 tool_use block，只取單筆會讓約 80% 的量誤落「回覆」桶。輸出 `calls` / `output` / `costUSD` 三個並列指標，並附警語說明 output token 衡量的是生成量而非工作量。
+- **`parser/shell-split.ts`**：從 `bash-classify.ts` 抽出的 shell 詞法層（切段、tokenize、heredoc、redirect 偵測），兩檔案皆回到 300 行規範內。
+
+#### Fixed
+
+- **`bash-classify` 丟棄一行式 `if` / 迴圈內的指令**：`if true; then pytest; fi` 會被切出 `then pytest` 段落，前一版把 `then` 當標點整段跳過，`pytest` 完全消失。改為剝除關鍵字後分類其後的指令。
+- **`node app.js --test` 誤判為 verify**：`--test` 屬於被執行的腳本而非 runtime。改為只認第一個位置參數之前的旗標。
+- **管線寫入的診斷 head 指向錯誤對象**：`printf x | tee out` 原本回報 `printf`，使 `echo` 之類的讀取指令佔據 `unknownBash` 榜首、誤導排查方向。改為指向實際寫入的段落。
+- **`TranscriptDedup` 對 NaN timestamp 排序不對稱**：無效 timestamp 先到就再也無法被有效者取代。改為有效 timestamp 一律優先，構成全序。
+
+#### 驗收
+
+實測近 14 天：五桶守恆精確成立，`unknownRate` 15.9%（計畫書門檻 25%），992/992 全部可計價，重複執行結果一致。對照計畫書 §2 記錄的 v1 狀態（understand 2.7%、other 41.6%），三項必要條件皆達成。
 
 ---
 

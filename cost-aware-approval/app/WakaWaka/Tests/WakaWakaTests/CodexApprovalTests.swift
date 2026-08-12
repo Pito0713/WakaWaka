@@ -1,69 +1,73 @@
-import XCTest
+import Foundation
+import Testing
 @testable import WakaWaka
 
-final class CodexApprovalTests: XCTestCase {
+/// Uses swift-testing rather than XCTest: XCTest ships with Xcode, while
+/// `Testing.framework` ships with the Command Line Tools, so these run on a
+/// machine that has never installed Xcode. See README "測試" for the rationale.
+struct CodexApprovalTests {
     private func decodePending(_ json: String) throws -> PendingData {
         try JSONDecoder().decode(PendingData.self, from: Data(json.utf8))
     }
 
-    func testCodexAgentHasStableDisplayLabel() throws {
+    @Test func codexAgentHasStableDisplayLabel() throws {
         let pending = try decodePending(#"{"agent":"codex","tool_name":"Bash","tool_input":{"command":"pwd"}}"#)
 
-        XCTAssertEqual(pending.agentDisplayLabel, "Codex")
+        #expect(pending.agentDisplayLabel == "Codex")
     }
 
-    func testApplyPatchBuildsFileSummaryAndColoredSections() throws {
+    @Test func applyPatchBuildsFileSummaryAndColoredSections() throws {
         let json = #"{"agent":"codex","tool_name":"apply_patch","tool_input":{"command":"*** Begin Patch\n*** Update File: Sources/App.swift\n@@\n-old\n+new\n*** End Patch"}}"#
         let pending = try decodePending(json)
 
-        XCTAssertEqual(pending.toolInputSummary, "Sources/App.swift")
-        XCTAssertTrue(pending.toolInputSections.contains { $0.kind == .removed && $0.text.contains("-old") })
-        XCTAssertTrue(pending.toolInputSections.contains { $0.kind == .added && $0.text.contains("+new") })
+        #expect(pending.toolInputSummary == "Sources/App.swift")
+        #expect(pending.toolInputSections.contains { $0.kind == .removed && $0.text.contains("-old") })
+        #expect(pending.toolInputSections.contains { $0.kind == .added && $0.text.contains("+new") })
     }
 
-    func testMissingEnforcementRemainsReviewable() throws {
+    @Test func missingEnforcementRemainsReviewable() throws {
         let pending = try decodePending(#"{"agent":"codex","tool_name":"Bash","tool_input":{"command":"pwd"}}"#)
 
-        XCTAssertNil(pending.enforcement)
-        XCTAssertFalse(pending.isPolicyDenied)
-        XCTAssertTrue(pending.canBeAllowed)
+        #expect(pending.enforcement == nil)
+        #expect(!pending.isPolicyDenied)
+        #expect(pending.canBeAllowed)
     }
 
-    func testDenyEnforcementIsNotReviewable() throws {
+    @Test func denyEnforcementIsNotReviewable() throws {
         let pending = try decodePending(#"{"agent":"codex","enforcement":"deny","tool_name":"Bash","tool_input":{"command":"shutdown"}}"#)
 
-        XCTAssertTrue(pending.isPolicyDenied)
-        XCTAssertFalse(pending.canBeAllowed)
-        XCTAssertFalse(canWriteAllowDecision(for: pending))
-        XCTAssertFalse(canWriteAlwaysAllowDecision(for: pending))
+        #expect(pending.isPolicyDenied)
+        #expect(!pending.canBeAllowed)
+        #expect(!canWriteAllowDecision(for: pending))
+        #expect(!canWriteAlwaysAllowDecision(for: pending))
     }
 
-    func testExpiredItemCannotWriteAllowDecisions() throws {
+    @Test func expiredItemCannotWriteAllowDecisions() throws {
         let pending = try decodePending(#"{"agent":"codex","hookExited":true,"risk_level":"medium","tool_name":"Bash","tool_input":{"command":"pwd"}}"#)
 
-        XCTAssertFalse(canWriteAllowDecision(for: pending))
-        XCTAssertFalse(canWriteAlwaysAllowDecision(for: pending))
+        #expect(!canWriteAllowDecision(for: pending))
+        #expect(!canWriteAlwaysAllowDecision(for: pending))
     }
 
-    func testAlwaysAllowRequiresMediumBash() throws {
+    @Test func alwaysAllowRequiresMediumBash() throws {
         let mediumBash = try decodePending(#"{"agent":"codex","risk_level":"medium","tool_name":"Bash","tool_input":{"command":"pwd"}}"#)
         let highBash = try decodePending(#"{"agent":"codex","risk_level":"high","tool_name":"Bash","tool_input":{"command":"sudo reboot"}}"#)
         let mediumPatch = try decodePending(#"{"agent":"codex","risk_level":"medium","tool_name":"apply_patch","tool_input":{"command":"*** Begin Patch\n*** End Patch"}}"#)
 
-        XCTAssertTrue(canWriteAlwaysAllowDecision(for: mediumBash))
-        XCTAssertFalse(canWriteAlwaysAllowDecision(for: highBash))
-        XCTAssertFalse(canWriteAlwaysAllowDecision(for: mediumPatch))
+        #expect(canWriteAlwaysAllowDecision(for: mediumBash))
+        #expect(!canWriteAlwaysAllowDecision(for: highBash))
+        #expect(!canWriteAlwaysAllowDecision(for: mediumPatch))
     }
 
-    func testSettingsDecodeDefaultsMissingCodexToDisabled() throws {
+    @Test func settingsDecodeDefaultsMissingCodexToDisabled() throws {
         let json = #"{"autoMode":{"claude-code":{"enabled":true,"expiresAt":null},"agy":{"enabled":false,"expiresAt":null}}}"#
         let settings = try JSONDecoder().decode(WakaWakaSettings.self, from: Data(json.utf8))
 
-        XCTAssertTrue(settings.autoMode.claudeCode.enabled)
-        XCTAssertEqual(settings.autoMode.codex, .disabled)
+        #expect(settings.autoMode.claudeCode.enabled)
+        #expect(settings.autoMode.codex == .disabled)
     }
 
-    func testViewModelKeepsThreeAutoModesIsolated() {
+    @Test func viewModelKeepsThreeAutoModesIsolated() {
         let model = PopoverViewModel()
         let settings = WakaWakaSettings(autoMode: .init(
             claudeCode: .init(enabled: true, expiresAt: "claude"),
@@ -73,25 +77,25 @@ final class CodexApprovalTests: XCTestCase {
 
         model.applyAutoMode(from: settings)
 
-        XCTAssertEqual(model.claudeCodeAutoMode.expiresAt, "claude")
-        XCTAssertFalse(model.agyAutoMode.enabled)
-        XCTAssertEqual(model.codexAutoMode.expiresAt, "codex")
+        #expect(model.claudeCodeAutoMode.expiresAt == "claude")
+        #expect(!model.agyAutoMode.enabled)
+        #expect(model.codexAutoMode.expiresAt == "codex")
     }
 
-    func testSettingsEncodeKeepsThreeAgentKeysSeparate() throws {
+    @Test func settingsEncodeKeepsThreeAgentKeysSeparate() throws {
         let settings = WakaWakaSettings(autoMode: .init(
             claudeCode: .init(enabled: true, expiresAt: "claude"),
             agy: .init(enabled: false, expiresAt: nil),
             codex: .init(enabled: true, expiresAt: "codex")
         ))
 
-        let object = try XCTUnwrap(
+        let object = try #require(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any]
         )
-        let autoMode = try XCTUnwrap(object["autoMode"] as? [String: Any])
+        let autoMode = try #require(object["autoMode"] as? [String: Any])
 
-        XCTAssertEqual(autoMode.keys.sorted(), ["agy", "claude-code", "codex"])
-        XCTAssertEqual((autoMode["codex"] as? [String: Any])?["expiresAt"] as? String, "codex")
-        XCTAssertEqual((autoMode["claude-code"] as? [String: Any])?["expiresAt"] as? String, "claude")
+        #expect(autoMode.keys.sorted() == ["agy", "claude-code", "codex"])
+        #expect((autoMode["codex"] as? [String: Any])?["expiresAt"] as? String == "codex")
+        #expect((autoMode["claude-code"] as? [String: Any])?["expiresAt"] as? String == "claude")
     }
 }
