@@ -32,6 +32,7 @@ enum ParserRunner {
     private static let calculatorPath = "\(parserDir)/usage-calculator.ts"
     private static let p90Path        = "\(parserDir)/p90-detector.ts"
     private static let dailyUsagePath = "\(parserDir)/daily-usage.ts"
+    private static let phaseUsagePath = "\(parserDir)/phase-usage.ts"
 
     // MARK: - Public API
 
@@ -64,6 +65,14 @@ enum ParserRunner {
     static func runDailyUsage(days: Int) -> DailyUsage? {
         runScript(scriptPath: dailyUsagePath, extraArgs: ["--days", String(days)], timeout: 30)
             .flatMap { try? JSONDecoder().decode(DailyUsage.self, from: $0) }
+    }
+
+    /// Bucket the last `days` days of API calls by activity phase.
+    /// Blocks up to 60s — it reads message content, not just usage totals, so
+    /// it scans more of each transcript than `runDailyUsage`. Returns nil on failure.
+    static func runPhaseUsage(days: Int) -> PhaseUsage? {
+        runScript(scriptPath: phaseUsagePath, extraArgs: ["--days", String(days)], timeout: 60)
+            .flatMap { try? JSONDecoder().decode(PhaseUsage.self, from: $0) }
     }
 
     // MARK: - Shared process runner

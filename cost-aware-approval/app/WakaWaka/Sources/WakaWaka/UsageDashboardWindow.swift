@@ -9,6 +9,7 @@ import AppKit
 /// quits on window close).
 final class UsageDashboardWindowController: NSWindowController {
     private let service = DailyUsageService()
+    private let phaseService = PhaseUsageService()
 
     convenience init() {
         let window = NSWindow(
@@ -22,14 +23,20 @@ final class UsageDashboardWindowController: NSWindowController {
         window.setFrameAutosaveName("UsageDashboardWindow")   // remember size/position
         window.center()
         self.init(window: window)
-        window.contentViewController = NSHostingController(rootView: UsageDashboardView(service: service))
+        window.contentViewController = NSHostingController(
+            rootView: UsageDashboardView(service: service, phaseService: phaseService)
+        )
     }
 
     /// Brings the window forward with a fresh live-quota snapshot and (re)loads
     /// the current window length.
+    ///
+    /// Only the daily tab is loaded here. The phase report reads message
+    /// content rather than usage totals, so it is slower; it loads the first
+    /// time its tab is actually opened.
     func present(liveQuota: LiveQuotaSnapshot?) {
         window?.contentViewController = NSHostingController(
-            rootView: UsageDashboardView(service: service, liveQuota: liveQuota)
+            rootView: UsageDashboardView(service: service, phaseService: phaseService, liveQuota: liveQuota)
         )
         service.load(days: service.days)
         showWindow(nil)
@@ -46,14 +53,28 @@ struct LiveQuotaSnapshot {
     let codex: CodexUsageState
 }
 
+/// Which report the window is showing. Only `daily` existed before; the phase
+/// report is a second tab rather than more rows, because it answers a
+/// different question and carries its own caveats.
+enum DashboardTab: String, CaseIterable, Identifiable {
+    case daily = "每日用量"
+    case phase = "活動分佈"
+    var id: String { rawValue }
+}
+
 struct UsageDashboardView: View {
     @ObservedObject var service: DailyUsageService
+    @ObservedObject var phaseService: PhaseUsageService
     let liveQuota: LiveQuotaSnapshot?
 
     @AppStorage("manualPlanLimit") private var manualPlanLimit = 0
     @AppStorage(ClaudePlan.detectedLimitKey) private var detectedLimit = 0
+    @State private var tab: DashboardTab = .daily
     @State private var daysSelection = 7
     @State private var metric: UsageMetric = .cost
+    /// Defaults to output per plan §3 — it is the most direct reading of "what
+    /// did this phase generate", with cost and call count alongside it.
+    @State private var phaseMetric: PhaseMetric = .output
     @State private var isShowingCalibration = false
     @State private var calibrationInput = ""
     @State private var now = Date()
@@ -64,8 +85,9 @@ struct UsageDashboardView: View {
         UsageAgent.codex.rawValue:  .green,
     ]
 
-    init(service: DailyUsageService, liveQuota: LiveQuotaSnapshot? = nil) {
+    init(service: DailyUsageService, phaseService: PhaseUsageService, liveQuota: LiveQuotaSnapshot? = nil) {
         self.service = service
+        self.phaseService = phaseService
         self.liveQuota = liveQuota
         // Mirror the service's current window so a rebuilt rootView (via present)
         // shows a picker that matches the data actually loaded, not a reset to 7.
@@ -89,8 +111,19 @@ struct UsageDashboardView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Text("用量儀表板").font(.headline)
+            Picker("", selection: $tab) {
+                ForEach(DashboardTab.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 180)
+            // The phase report is slower, so it loads when its tab is first
+            // opened rather than on every window present.
+            .onChange(of: tab) { _, new in
+                if new == .phase { phaseService.load(days: daysSelection) }
+            }
+
             Spacer()
+
             Picker("", selection: $daysSelection) {
                 Text("7 天").tag(7)
                 Text("14 天").tag(14)
@@ -98,17 +131,14 @@ struct UsageDashboardView: View {
             }
             .pickerStyle(.segmented)
             .frame(width: 170)
-            .onChange(of: daysSelection) { _, new in service.load(days: new) }
-
-            Picker("", selection: $metric) {
-                ForEach(UsageMetric.allCases) { Text($0.rawValue).tag($0) }
+            .onChange(of: daysSelection) { _, new in
+                service.load(days: new)
+                if tab == .phase || phaseService.hasLoaded { phaseService.load(days: new) }
             }
-            .pickerStyle(.segmented)
-            .frame(width: 130)
 
-            Button {
-                service.load(days: service.days, force: true)
-            } label: {
+            metricPicker
+
+            Button(action: refreshCurrentTab) {
                 Image(systemName: "arrow.clockwise")
             }
             .help("重新讀取")
@@ -117,14 +147,48 @@ struct UsageDashboardView: View {
         .padding(.vertical, 12)
     }
 
+    /// Each tab has its own metric set — the daily chart plots cost or raw
+    /// tokens, the phase report also offers call count.
+    @ViewBuilder
+    private var metricPicker: some View {
+        switch tab {
+        case .daily:
+            Picker("", selection: $metric) {
+                ForEach(UsageMetric.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 130)
+        case .phase:
+            Picker("", selection: $phaseMetric) {
+                ForEach(PhaseMetric.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 180)
+        }
+    }
+
+    private func refreshCurrentTab() {
+        switch tab {
+        case .daily: service.load(days: service.days, force: true)
+        case .phase: phaseService.load(days: daysSelection, force: true)
+        }
+    }
+
     // MARK: State routing
 
     private var content: some View {
         VStack(spacing: 0) {
+            // Live quota is about "how much is left right now", which applies
+            // whichever report is on screen, so it stays above the tabs.
             liveQuotaSection
                 .padding(16)
             Divider()
-            dailyUsageContent
+            switch tab {
+            case .daily:
+                dailyUsageContent
+            case .phase:
+                PhaseUsageView(service: phaseService, metric: $phaseMetric)
+            }
         }
     }
 

@@ -1,0 +1,245 @@
+{
+  "generatedAt": "2026-08-12T13:00:35.310Z",
+  "granularity": "session",
+  "pricingAsOf": "2026-08-12",
+  "toolPhasesVersion": 1,
+  "segments": [
+    {
+      "id": "sess-b3e42f",
+      "label": "sample-project",
+      "startedAt": "2026-08-12T03:05:59.567Z",
+      "total": {
+        "calls": 312,
+        "output": 283087,
+        "uncachedInput": 1611,
+        "cacheRead": 190151129,
+        "cacheWrite": 2281125,
+        "costUSD": 124.972
+      },
+      "phases": {
+        "understand": {
+          "calls": 117,
+          "output": 65752,
+          "uncachedInput": 1248,
+          "cacheRead": 68520382,
+          "cacheWrite": 2004621,
+          "costUSD": 55.9564,
+          "direct": {
+            "calls": 117,
+            "output": 65752
+          },
+          "sidechain": {
+            "calls": 0,
+            "output": 0
+          }
+        },
+        "develop": {
+          "calls": 123,
+          "output": 158246,
+          "uncachedInput": 230,
+          "cacheRead": 75679877,
+          "cacheWrite": 167611,
+          "costUSD": 43.4733,
+          "direct": {
+            "calls": 123,
+            "output": 158246
+          },
+          "sidechain": {
+            "calls": 0,
+            "output": 0
+          }
+        },
+        "verify": {
+          "calls": 43,
+          "output": 22292,
+          "uncachedInput": 81,
+          "cacheRead": 29122733,
+          "cacheWrite": 64749,
+          "costUSD": 15.7666,
+          "direct": {
+            "calls": 43,
+            "output": 22292
+          },
+          "sidechain": {
+            "calls": 0,
+            "output": 0
+          }
+        },
+        "reply": {
+          "calls": 10,
+          "output": 11345,
+          "uncachedInput": 19,
+          "cacheRead": 6480069,
+          "cacheWrite": 9742,
+          "costUSD": 3.6212,
+          "direct": {
+            "calls": 10,
+            "output": 11345
+          },
+          "sidechain": {
+            "calls": 0,
+            "output": 0
+          }
+        },
+        "other": {
+          "calls": 19,
+          "output": 25452,
+          "uncachedInput": 33,
+          "cacheRead": 10348068,
+          "cacheWrite": 34402,
+          "costUSD": 6.1545,
+          "direct": {
+            "calls": 19,
+            "output": 25452
+          },
+          "sidechain": {
+            "calls": 0,
+            "output": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "sess-9ab193",
+      "label": "sample-project",
+      "startedAt": "2026-08-11T01:42:47.621Z",
+      "total": {
+        "calls": 39,
+        "output": 52366,
+        "uncachedInput": 1624,
+        "cacheRead": 3014705,
+        "cacheWrite": 230528,
+        "costUSD": 5.1299
+      },
+      "phases": {
+        "understand": {
+          "calls": 14,
+          "output": 9006,
+          "uncachedInput": 1577,
+          "cacheRead": 890851,
+          "cacheWrite": 43051,
+          "costUSD": 1.109,
+          "direct": {
+            "calls": 14,
+            "output": 9006
+          },
+          "sidechain": {
+            "calls": 0,
+            "output": 0
+          }
+        },
+        "develop": {
+          "calls": 13,
+          "output": 17290,
+          "uncachedInput": 26,
+          "cacheRead": 1215541,
+          "cacheWrite": 126752,
+          "costUSD": 2.3077,
+          "direct": {
+            "calls": 13,
+            "output": 17290
+          },
+          "sidechain": {
+            "calls": 0,
+            "output": 0
+          }
+        },
+        "verify": {
+          "calls": 0,
+          "output": 0,
+          "uncachedInput": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "costUSD": 0,
+          "direct": {
+            "calls": 0,
+            "output": 0
+          },
+          "sidechain": {
+            "calls": 0,
+            "output": 0
+          }
+        },
+        "reply": {
+          "calls": 7,
+          "output": 16999,
+          "uncachedInput": 13,
+          "cacheRead": 587699,
+          "cacheWrite": 12461,
+          "costUSD": 0.8435,
+          "direct": {
+            "calls": 7,
+            "output": 16999
+          },
+          "sidechain": {
+            "calls": 0,
+            "output": 0
+          }
+        },
+        "other": {
+          "calls": 5,
+          "output": 9071,
+          "uncachedInput": 8,
+          "cacheRead": 320614,
+          "cacheWrite": 48264,
+          "costUSD": 0.8698,
+          "direct": {
+            "calls": 5,
+            "output": 9071
+          },
+          "sidechain": {
+            "calls": 0,
+            "output": 0
+          }
+        }
+      }
+    }
+  ],
+  "diagnostics": {
+    "unclassifiedTools": [
+      {
+        "name": "Skill",
+        "calls": 5,
+        "output": 3316
+      },
+      {
+        "name": "ToolSearch",
+        "calls": 2,
+        "output": 1160
+      }
+    ],
+    "unknownBash": [
+      {
+        "head": "python3",
+        "calls": 11,
+        "output": 17729
+      },
+      {
+        "head": "cat",
+        "calls": 8,
+        "output": 16191
+      }
+    ],
+    "mixedCalls": [
+      {
+        "combo": "Bash+Read",
+        "calls": 7
+      },
+      {
+        "combo": "Bash+WebSearch",
+        "calls": 2
+      }
+    ],
+    "excluded": {
+      "synthetic": 1,
+      "noUsage": 0
+    },
+    "unknownRate": 0.08989192983894523,
+    "pricedCalls": 376,
+    "totalCalls": 376
+  },
+  "warnings": [
+    "output token 衡量的是生成量，不是工作量、時間或認知負荷；三個指標請並列閱讀，勿做績效解讀。",
+    "cache read 使 session 後段的階段系統性偏貴，與該階段本身的成本無關。"
+  ]
+}
