@@ -23,6 +23,19 @@ import * as os from 'os';
 import * as path from 'path';
 import * as readline from 'readline';
 import { fileURLToPath } from 'url';
+import {
+  addClaudeTokens,
+  claudeCost,
+  claudeModelPricing,
+  claudeTokensFromUsage,
+  emptyClaudeTokens,
+  loadPricing,
+  round4,
+  NON_BILLED_MODELS,
+  type ClaudeTokens,
+  type CodexPricing,
+  type PricingTable,
+} from './pricing.js';
 
 const MTok = 1_000_000;
 const FILE_MTIME_BUFFER_MS = 6 * 60 * 60 * 1000; // clock-skew / cross-tz slack
@@ -53,54 +66,26 @@ interface DayEntry {
   };
 }
 
+/**
+ * How much of the window could actually be priced. Without this a partially
+ * priced day is indistinguishable from a cheap one — the dashboard would
+ * under-report and look authoritative doing it.
+ */
+interface PricingCoverage {
+  /** Date the price table was last verified against the official source. */
+  asOf: string;
+  /** Deduplicated Claude API calls that matched a model in the price table. */
+  pricedCalls: number;
+  /** Deduplicated Claude API calls in the window, excluding non-billed rows. */
+  totalCalls: number;
+  /** Model ids seen in the window with no entry in the price table. */
+  unpricedModels: string[];
+}
+
 interface DailyUsageResult {
   generatedAt: string;
   days: DayEntry[];
-}
-
-// ── Pricing ───────────────────────────────────────────────────────────────────
-
-interface ClaudePricing {
-  inputPerMTok: number;
-  outputPerMTok: number;
-  cacheReadPerMTok: number;
-  cacheCreationPerMTok: number;
-}
-
-interface CodexPricing {
-  inputPerMTok: number;
-  cachedInputPerMTok: number;
-  outputPerMTok: number;
-  cacheCreationPerMTok: number;
-}
-
-function loadPricing(): { claude: ClaudePricing; codex: CodexPricing | null } {
-  const pricingPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'pricing.json');
-  const raw = JSON.parse(fs.readFileSync(pricingPath, 'utf8')) as Record<string, unknown>;
-  const claude: ClaudePricing = {
-    inputPerMTok: Number(raw.inputPerMTok),
-    outputPerMTok: Number(raw.outputPerMTok),
-    cacheReadPerMTok: Number(raw.cacheReadPerMTok),
-    cacheCreationPerMTok: Number(raw.cacheCreationPerMTok),
-  };
-  const codex = extractCodexPricing(raw.codex);
-  return { claude, codex };
-}
-
-/** Returns null unless every Codex price is a finite number (plan §1: no guessing). */
-function extractCodexPricing(node: unknown): CodexPricing | null {
-  if (!node || typeof node !== 'object') return null;
-  const c = node as Record<string, unknown>;
-  const fields = ['inputPerMTok', 'cachedInputPerMTok', 'outputPerMTok', 'cacheCreationPerMTok'];
-  for (const f of fields) {
-    if (typeof c[f] !== 'number' || !Number.isFinite(c[f] as number)) return null;
-  }
-  return {
-    inputPerMTok: c.inputPerMTok as number,
-    cachedInputPerMTok: c.cachedInputPerMTok as number,
-    outputPerMTok: c.outputPerMTok as number,
-    cacheCreationPerMTok: c.cacheCreationPerMTok as number,
-  };
+  pricing: PricingCoverage;
 }
 
 // ── Date helpers (LOCAL timezone) ─────────────────────────────────────────────
@@ -180,69 +165,85 @@ function toInt(v: unknown): number {
 
 // ── Claude Code aggregation ───────────────────────────────────────────────────
 
-interface ClaudeAcc {
-  uncachedInput: number;
-  cacheRead: number;
-  cacheWrite: number;
-  output: number;
+/** Model id used when a transcript row carries usage but names no model. */
+const UNKNOWN_MODEL = '(unknown)';
+
+/** Per-day, per-model token buckets. Outer key: local date; inner key: model id. */
+type ClaudeDaily = Map<string, Map<string, ClaudeTokens>>;
+
+interface ClaudeScan {
+  daily: ClaudeDaily;
+  /** Deduplicated billable calls per model, for pricing-coverage reporting. */
+  callsByModel: Map<string, number>;
 }
 
-function emptyClaudeAcc(): ClaudeAcc {
-  return { uncachedInput: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+/** One deduplicated API response, tagged with the day and model it bills to. */
+interface ClaudeEntry {
+  date: string;
+  model: string;
+  tokens: ClaudeTokens;
+}
+
+/**
+ * Normalises one JSONL row into a dedup entry, or null when the row is not a
+ * billable API response (no usage, unparseable timestamp, outside the window,
+ * or a `<synthetic>` local placeholder).
+ */
+function readClaudeRow(obj: Record<string, unknown>, dates: Set<string>): ClaudeEntry | null {
+  const message = obj.message as Record<string, unknown> | undefined;
+  const usage = message?.usage as Record<string, unknown> | undefined;
+  if (!usage || typeof usage['input_tokens'] !== 'number') return null;
+
+  const tsRaw = typeof obj.timestamp === 'string' ? obj.timestamp : '';
+  const tsMs = tsRaw ? new Date(tsRaw).getTime() : NaN;
+  if (Number.isNaN(tsMs)) return null;
+  const date = localDateKey(tsMs);
+  if (!dates.has(date)) return null;
+
+  const model = typeof message?.model === 'string' ? message.model : UNKNOWN_MODEL;
+  if (NON_BILLED_MODELS.has(model)) return null;
+
+  return { date, model, tokens: claudeTokensFromUsage(usage) };
+}
+
+function dedupKey(obj: Record<string, unknown>, nokeySeq: () => number): string {
+  const requestId = typeof obj.requestId === 'string' ? obj.requestId : '';
+  const msgId = (obj.message as Record<string, unknown> | undefined)?.id;
+  const msgIdStr = typeof msgId === 'string' ? msgId : '';
+  return requestId && msgIdStr ? `${requestId}|${msgIdStr}` : `__nokey_${nokeySeq()}`;
 }
 
 async function aggregateClaude(
   dir: string,
   dates: Set<string>,
   periodStartMs: number
-): Promise<Map<string, ClaudeAcc>> {
+): Promise<ClaudeScan> {
   const files = recentFiles(dir, periodStartMs);
 
-  // Global dedup across all files: same API response can appear multiple times.
-  // Value carries the day bucket so we only sum survivors once, after dedup.
-  const dedup = new Map<string, { date: string; delta: ClaudeAcc }>();
-  let nokeySeq = 0;
+  // Global dedup across all files: the same API response is written to the
+  // JSONL repeatedly as it streams, and last-write-wins is the complete state.
+  const dedup = new Map<string, ClaudeEntry>();
+  let seq = 0;
+  const nextSeq = () => seq++;
 
   for (const file of files) {
     await eachLine(file, (obj) => {
-      const usage = (obj.message as Record<string, unknown> | undefined)?.usage as
-        | Record<string, unknown>
-        | undefined;
-      if (!usage || typeof usage['input_tokens'] !== 'number') return;
-
-      const tsRaw = typeof obj.timestamp === 'string' ? obj.timestamp : '';
-      const tsMs = tsRaw ? new Date(tsRaw).getTime() : NaN;
-      if (Number.isNaN(tsMs)) return;
-      const date = localDateKey(tsMs);
-      if (!dates.has(date)) return;
-
-      const requestId = typeof obj.requestId === 'string' ? obj.requestId : '';
-      const msgId = (obj.message as Record<string, unknown> | undefined)?.id;
-      const msgIdStr = typeof msgId === 'string' ? msgId : '';
-      const key = requestId && msgIdStr ? `${requestId}|${msgIdStr}` : `__nokey_${nokeySeq++}`;
-
-      dedup.set(key, {
-        date,
-        delta: {
-          uncachedInput: toInt(usage['input_tokens']),
-          cacheRead: toInt(usage['cache_read_input_tokens']),
-          cacheWrite: toInt(usage['cache_creation_input_tokens']),
-          output: toInt(usage['output_tokens']),
-        },
-      });
+      const entry = readClaudeRow(obj, dates);
+      if (entry) dedup.set(dedupKey(obj, nextSeq), entry);
     });
   }
 
-  const daily = new Map<string, ClaudeAcc>();
-  for (const { date, delta } of dedup.values()) {
-    const acc = daily.get(date) ?? emptyClaudeAcc();
-    acc.uncachedInput += delta.uncachedInput;
-    acc.cacheRead += delta.cacheRead;
-    acc.cacheWrite += delta.cacheWrite;
-    acc.output += delta.output;
-    daily.set(date, acc);
+  const daily: ClaudeDaily = new Map();
+  const callsByModel = new Map<string, number>();
+  for (const { date, model, tokens } of dedup.values()) {
+    const byModel = daily.get(date) ?? new Map<string, ClaudeTokens>();
+    const acc = byModel.get(model) ?? emptyClaudeTokens();
+    addClaudeTokens(acc, tokens);
+    byModel.set(model, acc);
+    daily.set(date, byModel);
+    callsByModel.set(model, (callsByModel.get(model) ?? 0) + 1);
   }
-  return daily;
+  return { daily, callsByModel };
 }
 
 // ── Codex aggregation ─────────────────────────────────────────────────────────
@@ -295,15 +296,6 @@ async function aggregateCodex(
 
 // ── Cost ──────────────────────────────────────────────────────────────────────
 
-function claudeCost(a: ClaudeAcc, p: ClaudePricing): number {
-  return (
-    (a.uncachedInput / MTok) * p.inputPerMTok +
-    (a.cacheRead / MTok) * p.cacheReadPerMTok +
-    (a.cacheWrite / MTok) * p.cacheCreationPerMTok +
-    (a.output / MTok) * p.outputPerMTok
-  );
-}
-
 function codexCost(a: CodexAcc, p: CodexPricing): number {
   return (
     (a.uncachedInput / MTok) * p.inputPerMTok +
@@ -312,8 +304,51 @@ function codexCost(a: CodexAcc, p: CodexPricing): number {
   );
 }
 
-function round4(n: number): number {
-  return Math.round(n * 10_000) / 10_000;
+/**
+ * Folds one day's per-model buckets into the display totals plus a cost.
+ *
+ * `costUSD` is null unless *every* model that day could be priced. Reporting
+ * the priced share of a partly priced day would be a confident-looking
+ * under-report — the same failure the no-fallback rule exists to prevent, and
+ * the UI has no way to know the figure was incomplete. Tokens are still
+ * reported either way.
+ *
+ * `date` selects the rate in force that day, so a promotional price that
+ * lapsed mid-window does not get applied to the whole window.
+ */
+function foldClaudeDay(byModel: Map<string, ClaudeTokens>, table: PricingTable, date: string): ClaudeDay {
+  const totals = emptyClaudeTokens();
+  let cost = 0;
+  let allPriced = true;
+
+  for (const [model, tokens] of byModel) {
+    addClaudeTokens(totals, tokens);
+    const price = claudeModelPricing(table, model, date);
+    if (!price) { allPriced = false; continue; }
+    cost += claudeCost(tokens, price);
+  }
+
+  return {
+    uncachedInput: totals.uncachedInput,
+    cacheRead: totals.cacheRead,
+    cacheWrite: totals.cacheWrite5m + totals.cacheWrite1h,
+    output: totals.output,
+    costUSD: allPriced ? round4(cost) : null,
+  };
+}
+
+function summarisePricing(callsByModel: Map<string, number>, table: PricingTable): PricingCoverage {
+  let pricedCalls = 0;
+  let totalCalls = 0;
+  const unpricedModels: string[] = [];
+
+  for (const [model, calls] of callsByModel) {
+    totalCalls += calls;
+    if (claudeModelPricing(table, model)) pricedCalls += calls;
+    else unpricedModels.push(model);
+  }
+
+  return { asOf: table.asOf, pricedCalls, totalCalls, unpricedModels: unpricedModels.sort() };
 }
 
 // ── Assembly ──────────────────────────────────────────────────────────────────
@@ -340,8 +375,9 @@ export async function computeDailyUsage(
   // Local start-of-day for the earliest day in the window.
   const periodStartMs = new Date(`${axis[0]}T00:00:00`).getTime();
 
-  const { claude: claudePricing, codex: codexPricing } = loadPricing();
-  const [claudeDaily, codexDaily] = await Promise.all([
+  const pricing = loadPricing();
+  const codexPricing = pricing.codex;
+  const [claudeScan, codexDaily] = await Promise.all([
     aggregateClaude(claudeDir, dateSet, periodStartMs),
     aggregateCodex(codexDir, dateSet, periodStartMs),
   ]);
@@ -349,15 +385,9 @@ export async function computeDailyUsage(
   const daysOut: DayEntry[] = axis.map((date) => {
     const agents: DayEntry['agents'] = {};
 
-    const c = claudeDaily.get(date);
-    if (c) {
-      agents['claude-code'] = {
-        uncachedInput: c.uncachedInput,
-        cacheRead: c.cacheRead,
-        cacheWrite: c.cacheWrite,
-        output: c.output,
-        costUSD: round4(claudeCost(c, claudePricing)),
-      };
+    const byModel = claudeScan.daily.get(date);
+    if (byModel) {
+      agents['claude-code'] = foldClaudeDay(byModel, pricing, date);
     }
 
     const x = codexDaily.get(date);
@@ -374,7 +404,11 @@ export async function computeDailyUsage(
     return { date, agents };
   });
 
-  return { generatedAt: new Date().toISOString(), days: daysOut };
+  return {
+    generatedAt: new Date().toISOString(),
+    days: daysOut,
+    pricing: summarisePricing(claudeScan.callsByModel, pricing),
+  };
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────

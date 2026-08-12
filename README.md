@@ -341,6 +341,27 @@ P90 偵測在以下情況會有大誤差：
 
 ---
 
+### v0.14.0 — 2026-08-12
+
+對應 `phase-usage-plan.md` 階段 0（逐模型定價）與階段 1（Bash 活動分類），兩者可獨立於後續階段出貨。
+
+#### Added
+
+- **`parser/pricing.ts`**：`daily-usage.ts` 與 `usage-calculator.ts` 共用的定價模組。兩條硬規則：未知模型一律回 `null`、**絕不** fallback 到任何預設費率（有把握的錯數字比缺數字更糟）；cache write 依 TTL 分開計價。定價表支援 `after` 生效日，逐日報表會依當日採用正確費率，介紹價到期不需人工改檔。
+- **`parser/bash-classify.ts`**：把 Bash 指令分類為 `understand` / `verify` / `other`。切 shell chain（`&&`／`||`／`;`／`|`）、剝除包裝（`cd x &&`、`env A=b`、`sudo`、`npx`、`python -m`）、取最高優先序段落。舊的「取首個 token」規則失效，因為實測 64 筆未分類指令有 60 筆以 `cd` 開頭。判不出來一律落 `other` 並記錄 head token 供 `unknownBash` 診斷 —— 誠實的缺口可被回報並修補，猜測則不能。真實資料未分類率由 63.6% 降至 21.1%。
+
+#### Fixed
+
+- **成本估算對所有模型套用同一組 Sonnet 4.6 費率**：近 14 天有 96% 的 API call 不是 sonnet-4-6，儀表板與 popover 的每一個金額都是錯的。改為逐模型計價後，實測 14 天成本由 $96.91 修正為 $183.05（原本**低估 88.9%**）。此問題早於本次功能，非新引入。
+- **cache write 一律以 5 分鐘費率計價**：官方 1 小時 TTL 為 input 的 2 倍、5 分鐘為 1.25 倍，而本機 84% 的 cache-creation token 是 1 小時。改為讀取 `usage.cache_creation` 的 TTL 明細分別計價；缺明細的舊 transcript 落回較便宜的 5m 費率（寧可低報也不灌水）。`cache_creation_input_tokens` 視為權威總額，兩個 TTL 分項恆等於它，避免損壞資料產生超額或負值成本。
+- **Sonnet 5 採用尚未生效的標準價**：介紹價 $2/$10 適用至 2026-08-31，原本寫死 $3/$15，該模型用量在介紹期內高估 50%。
+- **部分可計價的區間回傳看似完整的金額**：只要當日／當前 bucket 有任一模型無法計價，`costUSD` 一律回 `null`。回報「已計價的那一份」會是一個看起來權威的低報數字，而 UI 無從分辨。token 數仍照常回報，另輸出 `pricedCalls` / `totalCalls` / `unpricedModels` 標示缺口大小。
+- **跨檔 dedup 結果取決於 I/O 完成順序**：`computeGlobalSession()` 平行讀檔後以 last-write-wins 覆寫，同一份資料重跑可能得到不同的 5h 用量與成本。改為依 timestamp 排序，同秒則以 `檔案:行號` 穩定 tie-break。
+- **`<synthetic>` 佔位列被計入用量**：該類記錄帶 usage 欄位但從未實際計費，現已排除於 token 與成本之外。
+- **`computeGlobalSession()` 註解稱 fixed-boundary**：實作其實是 `now − 5h` 的 sliding window，與 `calculateUsage` 一致，與 `p90-detector` 不同。註解已更正。
+
+---
+
 ### v0.13.1 — 2026-08-07
 
 #### Fixed

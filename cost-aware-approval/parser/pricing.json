@@ -1,11 +1,92 @@
 {
-  "_date": "2026-06-13",
-  "_note": "手動維護，需定期更新。來源：cloudzero.com/blog/claude-pricing + apidog.com/blog/claude-3-5-sonnet-pricing，Gemini 交叉搜尋確認於 2026-06-13。",
-  "model": "claude-sonnet-4-6",
-  "inputPerMTok": 3.0,
-  "outputPerMTok": 15.0,
-  "cacheReadPerMTok": 0.3,
-  "cacheCreationPerMTok": 3.75,
+  "pricingAsOf": "2026-08-12",
+  "_note": "標準 API list price（USD / MTok）估算，非實際帳單。訂閱制下請視為等值估算。不含 fast mode、長 context 加價、Batch API 折扣。",
+  "claude": {
+    "_source": "Anthropic 官方模型與定價表（platform.claude.com/docs/en/about-claude/models/overview、/docs/en/pricing），經 claude-api skill 快取於 2026-06-24 核對。",
+    "_cacheNote": "官方 cache 費率為 input 的倍數：read = 0.1x、5 分鐘 write = 1.25x、1 小時 write = 2x。逐模型展開成絕對數字以便稽核。",
+    "_sonnet5Note": "claude-sonnet-5 介紹價 $2/$10 適用至 2026-08-31，之後回標準價 $3/$15。以 `after` 表達，逐日報表會依該日期自動採用正確費率。",
+    "_aliasNote": "同時列出 dateless alias 與官方 canonical dated ID（如 claude-haiku-4-5-20251001），因為 transcript 兩種都可能出現；查表為精確比對，不做前綴猜測。",
+    "models": {
+      "claude-fable-5": {
+        "inputPerMTok": 10.0,
+        "outputPerMTok": 50.0,
+        "cacheReadPerMTok": 1.0,
+        "cacheWrite5mPerMTok": 12.5,
+        "cacheWrite1hPerMTok": 20.0
+      },
+      "claude-mythos-5": {
+        "inputPerMTok": 10.0,
+        "outputPerMTok": 50.0,
+        "cacheReadPerMTok": 1.0,
+        "cacheWrite5mPerMTok": 12.5,
+        "cacheWrite1hPerMTok": 20.0
+      },
+      "claude-opus-5": {
+        "inputPerMTok": 5.0,
+        "outputPerMTok": 25.0,
+        "cacheReadPerMTok": 0.5,
+        "cacheWrite5mPerMTok": 6.25,
+        "cacheWrite1hPerMTok": 10.0
+      },
+      "claude-opus-4-8": {
+        "inputPerMTok": 5.0,
+        "outputPerMTok": 25.0,
+        "cacheReadPerMTok": 0.5,
+        "cacheWrite5mPerMTok": 6.25,
+        "cacheWrite1hPerMTok": 10.0
+      },
+      "claude-opus-4-7": {
+        "inputPerMTok": 5.0,
+        "outputPerMTok": 25.0,
+        "cacheReadPerMTok": 0.5,
+        "cacheWrite5mPerMTok": 6.25,
+        "cacheWrite1hPerMTok": 10.0
+      },
+      "claude-opus-4-6": {
+        "inputPerMTok": 5.0,
+        "outputPerMTok": 25.0,
+        "cacheReadPerMTok": 0.5,
+        "cacheWrite5mPerMTok": 6.25,
+        "cacheWrite1hPerMTok": 10.0
+      },
+      "claude-sonnet-5": {
+        "inputPerMTok": 2.0,
+        "outputPerMTok": 10.0,
+        "cacheReadPerMTok": 0.2,
+        "cacheWrite5mPerMTok": 2.5,
+        "cacheWrite1hPerMTok": 4.0,
+        "after": {
+          "date": "2026-09-01",
+          "inputPerMTok": 3.0,
+          "outputPerMTok": 15.0,
+          "cacheReadPerMTok": 0.3,
+          "cacheWrite5mPerMTok": 3.75,
+          "cacheWrite1hPerMTok": 6.0
+        }
+      },
+      "claude-sonnet-4-6": {
+        "inputPerMTok": 3.0,
+        "outputPerMTok": 15.0,
+        "cacheReadPerMTok": 0.3,
+        "cacheWrite5mPerMTok": 3.75,
+        "cacheWrite1hPerMTok": 6.0
+      },
+      "claude-haiku-4-5": {
+        "inputPerMTok": 1.0,
+        "outputPerMTok": 5.0,
+        "cacheReadPerMTok": 0.1,
+        "cacheWrite5mPerMTok": 1.25,
+        "cacheWrite1hPerMTok": 2.0
+      },
+      "claude-haiku-4-5-20251001": {
+        "inputPerMTok": 1.0,
+        "outputPerMTok": 5.0,
+        "cacheReadPerMTok": 0.1,
+        "cacheWrite5mPerMTok": 1.25,
+        "cacheWrite1hPerMTok": 2.0
+      }
+    }
+  },
   "codex": {
     "_note": "GPT-5.6 Sol Standard API 每 MTok 基礎價格。來源：https://developers.openai.com/api/docs/models/gpt-5.6-sol（查證於 2026-07-27）。cachedInputPerMTok 對應 Codex 的 cached_input_tokens；cache write 為 uncached input 的 1.25 倍。超過 272K input tokens 的 request 另有長 context 加價，現有每日聚合估算未逐 request 套用。",
     "_date": "2026-07-27",

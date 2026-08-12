@@ -2,6 +2,30 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
 import { fileURLToPath } from 'url';
+import {
+  addClaudeTokens,
+  claudeCost,
+  claudeModelPricing,
+  claudeTokensFromUsage,
+  emptyClaudeTokens,
+  loadPricing,
+  NON_BILLED_MODELS,
+  type ClaudeTokens,
+  type PricingTable,
+} from './pricing.js';
+
+/** Model id used when a transcript row carries usage but names no model. */
+const UNKNOWN_MODEL = '(unknown)';
+
+/**
+ * Token buckets split by model, carried alongside the display totals so each
+ * bucket can be priced at its own model's rate. Keys are model ids.
+ */
+export interface ModelBuckets {
+  cumulative: Map<string, ClaudeTokens>;
+  session: Map<string, ClaudeTokens>;
+  turn: Map<string, ClaudeTokens>;
+}
 
 export interface UsageSnapshot {
   cumulativeInput: number;
@@ -25,14 +49,6 @@ export interface UsageSnapshot {
   turnCacheCreation: number;
 }
 
-export interface PricingTable {
-  model: string;
-  inputPerMTok: number;
-  outputPerMTok: number;
-  cacheReadPerMTok: number;
-  cacheCreationPerMTok: number;
-}
-
 interface CumulativePoint {
   input: number;
   output: number;
@@ -40,23 +56,61 @@ interface CumulativePoint {
   cacheCreation: number;
 }
 
-function toInt(v: unknown): number {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.floor(n) : 0;
+/** Display totals (TTLs collapsed) paired with the model that billed them. */
+interface UsageRow {
+  point: CumulativePoint;
+  model: string;
+  tokens: ClaudeTokens;
 }
 
-function extractUsage(obj: Record<string, unknown>): CumulativePoint | null {
-  const usage = (obj?.message as Record<string, unknown>)?.usage;
+function extractUsage(obj: Record<string, unknown>): UsageRow | null {
+  const message = obj?.message as Record<string, unknown> | undefined;
+  const usage = message?.usage;
   if (!usage || typeof usage !== 'object') return null;
   const u = usage as Record<string, unknown>;
   // Require at least input_tokens to be a positive-or-zero number
   if (typeof u['input_tokens'] !== 'number') return null;
+
+  const model = typeof message?.model === 'string' ? message.model : UNKNOWN_MODEL;
+  // `<synthetic>` rows are local placeholders that were never billed.
+  if (NON_BILLED_MODELS.has(model)) return null;
+
+  const tokens = claudeTokensFromUsage(u);
   return {
-    input: toInt(u['input_tokens']),
-    output: toInt(u['output_tokens']),
-    cacheRead: toInt(u['cache_read_input_tokens']),
-    cacheCreation: toInt(u['cache_creation_input_tokens']),
+    model,
+    tokens,
+    point: {
+      input: tokens.uncachedInput,
+      output: tokens.output,
+      cacheRead: tokens.cacheRead,
+      cacheCreation: tokens.cacheWrite5m + tokens.cacheWrite1h,
+    },
   };
+}
+
+/** Adds `tokens` into the per-model bucket map, creating the bucket if new. */
+function accumulateModel(buckets: Map<string, ClaudeTokens>, model: string, tokens: ClaudeTokens): void {
+  const acc = buckets.get(model) ?? emptyClaudeTokens();
+  addClaudeTokens(acc, tokens);
+  buckets.set(model, acc);
+}
+
+/**
+ * Cost of one per-model bucket map, or null unless *every* model in it could
+ * be priced. An empty map is also null: nothing measured is not the same as
+ * free. Returning the priced share of a partly priced map would show a
+ * confident number that silently under-reports.
+ */
+export function bucketCost(buckets: Map<string, ClaudeTokens>, table: PricingTable): number | null {
+  let cost = 0;
+  let counted = 0;
+  for (const [model, tokens] of buckets) {
+    const price = claudeModelPricing(table, model);
+    if (!price) return null;
+    cost += claudeCost(tokens, price);
+    counted++;
+  }
+  return counted > 0 ? cost : null;
 }
 
 const SESSION_WINDOW_MS = 5 * 60 * 60 * 1000; // 5-hour rolling window
@@ -72,10 +126,17 @@ interface NormalisedEntry {
   tsMs: number;
   timestampISO: string;
   delta: CumulativePoint;
+  model: string;
+  tokens: ClaudeTokens;
   isHumanTurn: boolean; // genuine human message (not tool-result)
 }
 
-export async function calculateUsage(transcriptPath: string): Promise<UsageSnapshot> {
+/** A snapshot plus the per-model buckets needed to price it. */
+export interface UsageScan extends UsageSnapshot {
+  byModel: ModelBuckets;
+}
+
+export async function calculateUsage(transcriptPath: string): Promise<UsageScan> {
   const fileStream = fs.createReadStream(transcriptPath);
   const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
 
@@ -117,14 +178,17 @@ export async function calculateUsage(transcriptPath: string): Promise<UsageSnaps
           tsMs:         Number.isNaN(tsMs) ? 0 : tsMs,
           timestampISO: tsRaw,
           delta:        { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+          model:        UNKNOWN_MODEL,
+          tokens:       emptyClaudeTokens(),
           isHumanTurn:  true,
         });
       }
       continue; // human entries never carry usage
     }
 
-    const delta = extractUsage(obj);
-    if (!delta) continue;
+    const row = extractUsage(obj);
+    if (!row) continue;
+    const delta = row.point;
 
     const requestId = typeof obj.requestId === 'string' ? obj.requestId : '';
     const msgId     = (obj.message as Record<string, unknown> | undefined)?.id;
@@ -143,6 +207,8 @@ export async function calculateUsage(transcriptPath: string): Promise<UsageSnaps
       tsMs:         Number.isNaN(tsMs) ? 0 : tsMs,
       timestampISO: tsRaw,
       delta,
+      model:        row.model,
+      tokens:       row.tokens,
       isHumanTurn: false,
     });
   }
@@ -161,15 +227,22 @@ export async function calculateUsage(transcriptPath: string): Promise<UsageSnaps
   let turnRunning: CumulativePoint = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
   let inTurn = false;
 
+  // Per-model buckets mirror the three accumulators above, so each can be
+  // priced at its own model's rate instead of one blended guess.
+  const byModel: ModelBuckets = { cumulative: new Map(), session: new Map(), turn: new Map() };
+
   for (const entry of entries) {
     // Human-turn marker → reset turn accumulator
     if (entry.isHumanTurn) {
       turnRunning = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+      byModel.turn.clear();
       inTurn = true;
       continue;
     }
 
-    const { tsMs, timestampISO, delta } = entry;
+    const { delta } = entry;
+    accumulateModel(byModel.cumulative, entry.model, entry.tokens);
+    if (inTurn) accumulateModel(byModel.turn, entry.model, entry.tokens);
 
     prev = { ...allTime };
     allTime = {
@@ -198,9 +271,11 @@ export async function calculateUsage(transcriptPath: string): Promise<UsageSnaps
     const windowCutoff = Date.now() - SESSION_WINDOW_MS;
     sessionStartISO = null;
     sessionRunning  = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+    byModel.session.clear();
     for (const entry of entries) {
       if (entry.isHumanTurn || entry.tsMs < windowCutoff) continue;
       if (sessionStartISO === null) sessionStartISO = entry.timestampISO;
+      accumulateModel(byModel.session, entry.model, entry.tokens);
       sessionRunning = {
         input:         sessionRunning.input         + entry.delta.input,
         output:        sessionRunning.output        + entry.delta.output,
@@ -240,28 +315,8 @@ export async function calculateUsage(transcriptPath: string): Promise<UsageSnaps
     turnOutput: turnRunning.output,
     turnCacheRead: turnRunning.cacheRead,
     turnCacheCreation: turnRunning.cacheCreation,
+    byModel,
   };
-}
-
-export function estimateCost(usage: UsageSnapshot, pricing: PricingTable): number {
-  const MTok = 1_000_000;
-  return (
-    (usage.cumulativeInput / MTok) * pricing.inputPerMTok +
-    (usage.cumulativeOutput / MTok) * pricing.outputPerMTok +
-    (usage.cumulativeCacheRead / MTok) * pricing.cacheReadPerMTok +
-    (usage.cumulativeCacheCreation / MTok) * pricing.cacheCreationPerMTok
-  );
-}
-
-/** Cost for the rolling 5-hour session window only (not all-time). */
-export function estimateSessionCost(usage: UsageSnapshot, pricing: PricingTable): number {
-  const MTok = 1_000_000;
-  return (
-    (usage.sessionInput / MTok) * pricing.inputPerMTok +
-    (usage.sessionOutput / MTok) * pricing.outputPerMTok +
-    (usage.sessionCacheRead / MTok) * pricing.cacheReadPerMTok +
-    (usage.sessionCacheCreation / MTok) * pricing.cacheCreationPerMTok
-  );
 }
 
 // ── Multi-file aggregation ────────────────────────────────────────────────────
@@ -280,8 +335,10 @@ function scanForJSONL(dir: string): string[] {
 
 /**
  * Merge all entries from multiple JSONL files into a single unified timeline
- * and detect the current 5-hour window using the same fixed-boundary algorithm
- * as p90-detector.ts.
+ * and detect the current 5-hour window with a sliding cutoff (`now − 5h`),
+ * matching `calculateUsage`. This is deliberately NOT the fixed-boundary
+ * algorithm in p90-detector.ts — the quota resets when the oldest counted
+ * entry ages out, so the boundary moves with the data.
  *
  * Root cause this fixes: the old per-file aggregation summed tokens from
  * windows with DIFFERENT start times (main session vs subagent files), which
@@ -298,18 +355,43 @@ async function computeGlobalSession(files: string[]): Promise<{
   sessionInput: number;
   sessionCacheRead: number;
   sessionCacheCreation: number;
+  byModel: Map<string, ClaudeTokens>;
 }> {
-  interface GEntry { tsMs: number; timestampISO: string; out: number; inp: number; cr: number; cw: number; }
+  interface GEntry {
+    tsMs: number;
+    timestampISO: string;
+    out: number; inp: number; cr: number; cw: number;
+    model: string;
+    tokens: ClaudeTokens;
+    /** `<file path>:<line>` — deterministic tie-break for equal timestamps. */
+    order: string;
+  }
 
   // Pass 1: read all files, dedup across the entire corpus
   const dedup = new Map<string, GEntry>();
   let nokey = 0;
 
+  /**
+   * Files are read in parallel, so "last write wins" would mean "whichever
+   * stream happened to finish last" — the same corpus could then produce
+   * different totals on consecutive runs. Order by timestamp instead, with
+   * (file path, line number) as a stable tie-break for the common case where
+   * duplicates share a timestamp.
+   */
+  const keep = (key: string, next: GEntry): void => {
+    const prev = dedup.get(key);
+    if (!prev || next.tsMs > prev.tsMs || (next.tsMs === prev.tsMs && next.order >= prev.order)) {
+      dedup.set(key, next);
+    }
+  };
+
   await Promise.all(files.map(async (file) => {
+    let lineNo = 0;
     try {
       const fileStream = fs.createReadStream(file);
       const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
       for await (const line of rl) {
+        lineNo++;
         const trimmed = line.trim();
         if (!trimmed) continue;
         let obj: Record<string, unknown>;
@@ -321,29 +403,33 @@ async function computeGlobalSession(files: string[]): Promise<{
 
         // Accept entries with a usage field — including out=0 entries which
         // anchor the session window start (same rule as calculateUsage).
-        const usage = (obj?.message as Record<string, unknown>)?.usage;
-        if (!usage || typeof usage !== 'object') continue;
-        const u = usage as Record<string, unknown>;
-        if (typeof u['input_tokens'] !== 'number') continue;
+        const row = extractUsage(obj);
+        if (!row) continue;
 
-        const out = Math.max(0, Math.floor(Number(u['output_tokens']        ?? 0)));
-        const inp = Math.max(0, Math.floor(Number(u['input_tokens']         ?? 0)));
-        const cr  = Math.max(0, Math.floor(Number(u['cache_read_input_tokens']    ?? 0)));
-        const cw  = Math.max(0, Math.floor(Number(u['cache_creation_input_tokens'] ?? 0)));
+        const out = Math.max(0, row.point.output);
+        const inp = Math.max(0, row.point.input);
+        const cr  = Math.max(0, row.point.cacheRead);
+        const cw  = Math.max(0, row.point.cacheCreation);
 
         const requestId = typeof obj.requestId === 'string' ? obj.requestId : '';
         const msgId     = (obj.message as Record<string, unknown>)?.id;
         const msgIdStr  = typeof msgId === 'string' ? msgId : '';
         const key = requestId && msgIdStr ? `${requestId}|${msgIdStr}` : `__nokey_${nokey++}`;
 
-        // Last-write wins (same as per-file dedup in calculateUsage)
-        dedup.set(key, { tsMs, timestampISO: obj.timestamp, out, inp, cr, cw });
+        keep(key, {
+          tsMs, timestampISO: obj.timestamp, out, inp, cr, cw,
+          model: row.model, tokens: row.tokens,
+          order: `${file}:${String(lineNo).padStart(9, '0')}`,
+        });
       }
     } catch { /* skip unreadable files */ }
   }));
 
   if (dedup.size === 0) {
-    return { sessionStartISO: null, sessionOutput: 0, sessionInput: 0, sessionCacheRead: 0, sessionCacheCreation: 0 };
+    return {
+      sessionStartISO: null, sessionOutput: 0, sessionInput: 0,
+      sessionCacheRead: 0, sessionCacheCreation: 0, byModel: new Map(),
+    };
   }
 
   // Pass 2: true sliding window — include every entry whose timestamp falls
@@ -355,6 +441,7 @@ async function computeGlobalSession(files: string[]): Promise<{
   const windowCutoff = Date.now() - SESSION_WINDOW_MS;
   let sessionStartISO: string | null = null;
   let out = 0, inp = 0, cr = 0, cw = 0;
+  const byModel = new Map<string, ClaudeTokens>();
 
   for (const entry of entries) {
     if (entry.tsMs < windowCutoff) continue;
@@ -363,9 +450,13 @@ async function computeGlobalSession(files: string[]): Promise<{
     inp += entry.inp;
     cr  += entry.cr;
     cw  += entry.cw;
+    accumulateModel(byModel, entry.model, entry.tokens);
   }
 
-  return { sessionStartISO, sessionOutput: out, sessionInput: inp, sessionCacheRead: cr, sessionCacheCreation: cw };
+  return {
+    sessionStartISO, sessionOutput: out, sessionInput: inp,
+    sessionCacheRead: cr, sessionCacheCreation: cw, byModel,
+  };
 }
 
 /**
@@ -374,12 +465,28 @@ async function computeGlobalSession(files: string[]): Promise<{
  * skipped (they cannot have entries in the current 5h quota window).
  *
  * Session window fields (sessionOutput etc.) come from a global unified
- * timeline merge across all recent files — same fixed-boundary algorithm as
- * p90-detector — so window expiry and cross-file boundaries are handled
- * correctly.  Cumulative and turn fields still come from the most-recently-
- * modified file (single-conversation stats).
+ * timeline merge across all recent files, using the same sliding 5-hour
+ * cutoff as `calculateUsage`, so window expiry and cross-file boundaries are
+ * handled consistently.  Cumulative and turn fields still come from the
+ * most-recently-modified file (single-conversation stats).
  */
-export async function aggregateSessionUsage(projectsDir: string): Promise<UsageSnapshot & { estimatedCostUSD: number; session5hCostUSD: number; turnCostUSD: number }> {
+/**
+ * The shape handed to Swift. `session5hCostUSD` and `turnCostUSD` are null
+ * when nothing in that bucket could be priced — the UI already treats both as
+ * optional and hides the row. `estimatedCostUSD` stays a plain number because
+ * Swift decodes it non-optionally; it is not displayed anywhere today.
+ */
+export interface CostedUsage extends UsageSnapshot {
+  estimatedCostUSD: number;
+  session5hCostUSD: number | null;
+  turnCostUSD: number | null;
+  /** Model ids seen with no entry in pricing.json, so gaps are visible. */
+  unpricedModels: string[];
+  /** Date the price table was last verified against the official source. */
+  pricingAsOf: string;
+}
+
+export async function aggregateSessionUsage(projectsDir: string): Promise<CostedUsage> {
   const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
   const cutoffMs = Date.now() - SIX_HOURS_MS;
 
@@ -391,8 +498,7 @@ export async function aggregateSessionUsage(projectsDir: string): Promise<UsageS
   });
   let recent = allWithMtime.filter((x) => x.mt >= cutoffMs);
 
-  const pricingPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'pricing.json');
-  const pricing: PricingTable = JSON.parse(fs.readFileSync(pricingPath, 'utf8'));
+  const pricing = loadPricing();
 
   // If no recent files, fall back to the single most-recently-modified file
   if (recent.length === 0) {
@@ -405,7 +511,10 @@ export async function aggregateSessionUsage(projectsDir: string): Promise<UsageS
         sessionCacheRead: 0, sessionCacheCreation: 0, turnInput: 0, turnOutput: 0,
         turnCacheRead: 0, turnCacheCreation: 0,
       };
-      return { ...empty, estimatedCostUSD: 0, session5hCostUSD: 0, turnCostUSD: 0 };
+      return {
+        ...empty, estimatedCostUSD: 0, session5hCostUSD: 0, turnCostUSD: 0,
+        unpricedModels: [], pricingAsOf: pricing.asOf,
+      };
     }
     recent = [sorted[0]];
   }
@@ -438,16 +547,30 @@ export async function aggregateSessionUsage(projectsDir: string): Promise<UsageS
     sessionCacheCreation:    global.sessionCacheCreation,
   };
 
-  const estimatedCostUSD = estimateCost(aggregated, pricing);
-  const session5hCostUSD = estimateSessionCost(aggregated, pricing);
-  const MTok = 1_000_000;
-  const turnCostUSD =
-    (aggregated.turnInput         / MTok) * pricing.inputPerMTok +
-    (aggregated.turnOutput        / MTok) * pricing.outputPerMTok +
-    (aggregated.turnCacheRead     / MTok) * pricing.cacheReadPerMTok +
-    (aggregated.turnCacheCreation / MTok) * pricing.cacheCreationPerMTok;
+  // Cumulative and turn buckets come from the anchor file; the session bucket
+  // comes from the global merge — each priced at its own models' rates.
+  const cumulativeBuckets = anchorSnap?.byModel.cumulative ?? new Map();
+  const turnBuckets = anchorSnap?.byModel.turn ?? new Map();
 
-  return { ...aggregated, estimatedCostUSD, session5hCostUSD, turnCostUSD };
+  return {
+    ...aggregated,
+    estimatedCostUSD: bucketCost(cumulativeBuckets, pricing) ?? 0,
+    session5hCostUSD: bucketCost(global.byModel, pricing),
+    turnCostUSD: bucketCost(turnBuckets, pricing),
+    unpricedModels: unpricedIn([cumulativeBuckets, turnBuckets, global.byModel], pricing),
+    pricingAsOf: pricing.asOf,
+  };
+}
+
+/** Model ids appearing in any bucket with no entry in the price table. */
+function unpricedIn(buckets: Map<string, ClaudeTokens>[], table: PricingTable): string[] {
+  const missing = new Set<string>();
+  for (const bucket of buckets) {
+    for (const model of bucket.keys()) {
+      if (!claudeModelPricing(table, model)) missing.add(model);
+    }
+  }
+  return Array.from(missing).sort();
 }
 
 // ── CLI entry point ───────────────────────────────────────────────────────────
@@ -467,29 +590,23 @@ async function main() {
     process.exit(1);
   }
 
-  const pricingPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'pricing.json');
-  const pricing: PricingTable = JSON.parse(fs.readFileSync(pricingPath, 'utf8'));
-
-  const required: (keyof PricingTable)[] = ['inputPerMTok', 'outputPerMTok', 'cacheReadPerMTok', 'cacheCreationPerMTok'];
-  for (const key of required) {
-    if (typeof pricing[key] !== 'number' || !Number.isFinite(pricing[key])) {
-      process.stderr.write(`pricing.json: invalid or missing field "${key}"\n`);
-      process.exit(1);
-    }
+  const pricing = loadPricing();
+  if (pricing.claudeModels.size === 0) {
+    process.stderr.write('pricing.json: claude.models is empty or malformed\n');
+    process.exit(1);
   }
 
-  const usage = await calculateUsage(transcriptPath);
-  const cost = estimateCost(usage, pricing);
-  const session5hCost = estimateSessionCost(usage, pricing);
-  const MTok = 1_000_000;
-  const turnCost =
-    (usage.turnInput / MTok) * pricing.inputPerMTok +
-    (usage.turnOutput / MTok) * pricing.outputPerMTok +
-    (usage.turnCacheRead / MTok) * pricing.cacheReadPerMTok +
-    (usage.turnCacheCreation / MTok) * pricing.cacheCreationPerMTok;
+  const { byModel, ...usage } = await calculateUsage(transcriptPath);
 
   process.stdout.write(
-    JSON.stringify({ ...usage, estimatedCostUSD: cost, session5hCostUSD: session5hCost, turnCostUSD: turnCost }, null, 2) + '\n',
+    JSON.stringify({
+      ...usage,
+      estimatedCostUSD: bucketCost(byModel.cumulative, pricing) ?? 0,
+      session5hCostUSD: bucketCost(byModel.session, pricing),
+      turnCostUSD: bucketCost(byModel.turn, pricing),
+      unpricedModels: unpricedIn([byModel.cumulative, byModel.session, byModel.turn], pricing),
+      pricingAsOf: pricing.asOf,
+    }, null, 2) + '\n',
   );
 }
 
