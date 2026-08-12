@@ -296,8 +296,10 @@ test('concurrent requests receive independent UUID approval ids', async () => {
 
 test('repo config resolves PermissionRequest from a nested cwd and preserves other hooks', async () => {
   const config = JSON.parse(fs.readFileSync(HOOK_CONFIG_PATH, 'utf8'));
-  assert.ok(config.hooks.Stop);
-  assert.ok(config.hooks.PreToolUse);
+  // The point is that mounting PermissionRequest leaves the other mounted
+  // hooks alone. That used to be checked against Stop, which was deliberately
+  // removed in d84ba00; PreToolUse is now the other hook in this config.
+  assert.ok(config.hooks.PreToolUse, 'mounting PermissionRequest must not drop PreToolUse');
   assert.equal(config.hooks.PermissionRequest[0].matcher, '*');
   const hookCommand = config.hooks.PermissionRequest[0].hooks[0].command;
   const harness = createHarness();

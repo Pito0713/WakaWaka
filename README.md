@@ -379,6 +379,23 @@ P90 偵測在以下情況會有大誤差：
 
 ---
 
+### v0.15.2 — 2026-08-12
+
+#### Fixed
+
+- **hook 測試逾時變數名稱錯誤，導致整份 suite 卡 9 分 50 秒**：`pretooluse-smart.test.mjs` 設 `POLL_TIMEOUT_MS`，但**沒有任何 hook 讀取這個變數**，實際生效的是 `FINAL_TIMEOUT_MS` 的正式預設值。決定檔沒等到時，本該只有該題失敗，卻變成整份 suite 停擺。改用 hook 真正讀取的 `WARN_TIMEOUT_MS` / `FINAL_TIMEOUT_MS`。
+- **hook 測試直接讀寫真實 `~/.wakawaka/`**：測試結果取決於 auto mode 當下是否生效、以及 WakaWaka 是否在執行（「預期 defer」會拿到 `allow`），並且會在 live state 目錄留下 `decision_test-*.json` 讓執行中的 app 誤判。改為每個測試獨立的暫存 root，並新增防迴歸守衛測試，任何覆寫遺漏都會當場被抓到而非污染使用者環境。
+- **`Edit` / `Write` 的「auto allow」測試是假的**：它們靠讀取使用者真實的 auto mode 設定才通過。hook 其實刻意將這兩個工具排除在免審批清單外，好讓使用者能先審視檔案變更；auto mode 開啟的情境另有正確覆蓋。改為斷言真正的契約 —— auto mode 關閉時必須進審批。
+- **`Stop` hook 斷言與現況不符**：`d84ba00` 刻意移除 Stop 掛載，但兩個測試仍斷言其存在，永久紅燈。改為對照該 config 現存的另一個 hook，保留「掛載某個 hook 不會弄丟其他 hook」的原意。
+
+#### Changed
+
+- **`pretooluse.mjs` / `pretooluse-agy.mjs` 補上 `WAKAWAKA_STATE_DIR` 與 `WAKAWAKA_ALLOWLIST_PATH` 覆寫**：`permissionrequest-codex.mjs` 早已支援，另兩支寫死 `os.homedir()`。未設定變數時行為完全不變。
+
+結果：hook 測試 62/70（且會卡死）→ **71/71，20 秒**，連續執行結果一致，不再碰觸 live 環境。
+
+---
+
 ### v0.15.1 — 2026-08-12
 
 #### Changed

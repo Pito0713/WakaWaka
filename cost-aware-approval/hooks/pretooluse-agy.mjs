@@ -19,8 +19,11 @@ import * as path from 'path';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
-const STATE_DIR      = path.join(os.homedir(), '.wakawaka', 'state');
-const ALLOWLIST_PATH = path.join(os.homedir(), '.wakawaka', 'allowlist.json');
+// Overridable for tests — see the note in pretooluse.mjs.
+const STATE_DIR      = process.env.WAKAWAKA_STATE_DIR
+  ?? path.join(os.homedir(), '.wakawaka', 'state');
+const ALLOWLIST_PATH = process.env.WAKAWAKA_ALLOWLIST_PATH
+  ?? path.join(os.homedir(), '.wakawaka', 'allowlist.json');
 const SETTINGS_PATH  = process.env.WAKAWAKA_SETTINGS_PATH
   ?? path.join(os.homedir(), '.wakawaka', 'settings.json');
 const AUTO_AUDIT_PATH = process.env.WAKAWAKA_AUDIT_PATH

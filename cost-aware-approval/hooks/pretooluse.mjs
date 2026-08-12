@@ -24,8 +24,15 @@ import * as path from 'path';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
-const STATE_DIR      = path.join(os.homedir(), '.wakawaka', 'state');
-const ALLOWLIST_PATH = path.join(os.homedir(), '.wakawaka', 'allowlist.json');
+// Every runtime path is overridable so tests can point at a temp directory
+// instead of the live ~/.wakawaka. Without this the suite reads the user's
+// real auto-mode settings and writes decision files into the running app's
+// state directory — the result then depends on whether auto mode happens to
+// be on and whether WakaWaka is running. Same idiom as permissionrequest-codex.mjs.
+const STATE_DIR      = process.env.WAKAWAKA_STATE_DIR
+  ?? path.join(os.homedir(), '.wakawaka', 'state');
+const ALLOWLIST_PATH = process.env.WAKAWAKA_ALLOWLIST_PATH
+  ?? path.join(os.homedir(), '.wakawaka', 'allowlist.json');
 const SETTINGS_PATH  = process.env.WAKAWAKA_SETTINGS_PATH
   ?? path.join(os.homedir(), '.wakawaka', 'settings.json');
 const AUTO_AUDIT_PATH = process.env.WAKAWAKA_AUDIT_PATH

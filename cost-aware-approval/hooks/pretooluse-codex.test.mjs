@@ -91,9 +91,11 @@ test('malformed input fails closed', async () => {
   assert.equal(output.hookSpecificOutput.permissionDecision, 'deny');
 });
 
-test('repo config preserves Stop and resolves PreToolUse from a nested cwd', async () => {
+test('repo config preserves other hooks and resolves PreToolUse from a nested cwd', async () => {
   const config = JSON.parse(fs.readFileSync(HOOK_CONFIG_PATH, 'utf8'));
-  assert.ok(config.hooks.Stop);
+  // Previously asserted against Stop, which was deliberately removed in
+  // d84ba00. PermissionRequest is the other hook this config now mounts.
+  assert.ok(config.hooks.PermissionRequest, 'mounting PreToolUse must not drop PermissionRequest');
   const command = config.hooks.PreToolUse[0].hooks[0].command;
   const child = spawn('/bin/sh', ['-c', command], {
     cwd: path.dirname(HOOK_PATH),

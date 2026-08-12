@@ -13,10 +13,38 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'node:child_process';
 
-const STATE_DIR = path.join(os.homedir(), '.wakawaka', 'state');
-const ALLOWLIST = path.join(os.homedir(), '.wakawaka', 'allowlist.json');
 const HOOK      = new URL('./pretooluse.mjs', import.meta.url).pathname;
 const HOOK_AGY  = new URL('./pretooluse-agy.mjs', import.meta.url).pathname;
+
+// A private ~/.wakawaka for this file. These tests previously used the real
+// one, so their results depended on whether auto mode was enabled and whether
+// the WakaWaka app was running to answer pending files — and they left
+// decision files in the live state directory for the running app to act on.
+const TMP_ROOT  = fs.mkdtempSync(path.join(os.tmpdir(), 'wakawaka-smart-'));
+const STATE_DIR = path.join(TMP_ROOT, 'state');
+const ALLOWLIST = path.join(TMP_ROOT, 'allowlist.json');
+const SETTINGS  = path.join(TMP_ROOT, 'settings.json');
+fs.mkdirSync(STATE_DIR, { recursive: true });
+// Auto mode off by default: these tests exercise the approval path, and an
+// auto-allow would silently turn an expected popover into an allow.
+fs.writeFileSync(SETTINGS, JSON.stringify({ autoMode: {} }), 'utf8');
+
+/**
+ * Applied to every hook invocation in this file.
+ *
+ * `WARN_TIMEOUT_MS` / `FINAL_TIMEOUT_MS` are the names the hook actually
+ * reads. This file previously set `POLL_TIMEOUT_MS`, which no hook has ever
+ * read — so a decision that never arrived fell back to the production 9m50s
+ * and stalled the whole suite instead of failing the one test.
+ */
+const BASE_ENV = {
+  WAKAWAKA_STATE_DIR:      STATE_DIR,
+  WAKAWAKA_ALLOWLIST_PATH: ALLOWLIST,
+  WAKAWAKA_SETTINGS_PATH:  SETTINGS,
+  WAKAWAKA_AUDIT_PATH:     path.join(TMP_ROOT, 'audit.jsonl'),
+  WARN_TIMEOUT_MS:         '3000',
+  FINAL_TIMEOUT_MS:        '5000',
+};
 
 function pendingPath(sid)  { return path.join(STATE_DIR, `pending_${sid}.json`); }
 function decisionPath(sid) { return path.join(STATE_DIR, `decision_${sid}.json`); }
@@ -33,7 +61,7 @@ function resetAllowlist() {
 function runHook(input, env = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [HOOK], {
-      env: { ...process.env, POLL_TIMEOUT_MS: '5000', ...env },
+      env: { ...process.env, ...BASE_ENV, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '', stderr = '';
@@ -52,7 +80,7 @@ function parseDecision(stdout) {
 function runHookAt(hookPath, input, env = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [hookPath], {
-      env: { ...process.env, POLL_TIMEOUT_MS: '5000', ...env },
+      env: { ...process.env, ...BASE_ENV, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '', stderr = '';
@@ -275,32 +303,33 @@ test('"always" on HIGH Bash does NOT save to allowlist', async () => {
   resetAllowlist();
 });
 
-// ── File write tools → auto-allow (user sees diffs in Claude Code UI) ────────
+// ── File write tools → require review unless auto mode is on ────────────────
+// `AUTO_ALLOW_TOOLS` deliberately excludes Edit / Write / MultiEdit so the user
+// can review file changes before they land. These two tests previously
+// asserted the opposite ("auto allow") and only passed because they read the
+// real ~/.wakawaka/settings.json, where auto mode happened to be enabled — the
+// auto-mode-on case is already covered separately further down this file.
 
-test('Edit → auto allow, no pending file', async () => {
-  const sid = 'test-edit';
+async function expectWritesPending(sid, toolName, toolInput) {
   cleanupSession(sid);
-  const r = await runHook({
-    session_id: sid,
-    tool_name: 'Edit',
-    tool_input: { file_path: '/tmp/x', old_string: 'a', new_string: 'b' },
-  });
+  const hookPromise = runHook(
+    { session_id: sid, tool_name: toolName, tool_input: toolInput },
+    { APP_DEAD_GRACE_MS: '3000', APP_CHECK_EVERY_MS: '0' },
+  );
+  await new Promise((r) => setTimeout(r, 500));
+  assert.ok(fs.existsSync(pendingPath(sid)), `${toolName} must be routed for review`);
+  fs.writeFileSync(decisionPath(sid), JSON.stringify({ decision: 'allow' }));
+  const r = await hookPromise;
   assert.equal(r.code, 0);
   assert.equal(parseDecision(r.stdout), 'allow');
-  assert.ok(!fs.existsSync(pendingPath(sid)));
+}
+
+test('Edit without auto mode → writes pending (user reviews the diff)', async () => {
+  await expectWritesPending('test-edit', 'Edit', { file_path: '/tmp/x', old_string: 'a', new_string: 'b' });
 });
 
-test('Write → auto allow, no pending file', async () => {
-  const sid = 'test-write';
-  cleanupSession(sid);
-  const r = await runHook({
-    session_id: sid,
-    tool_name: 'Write',
-    tool_input: { file_path: '/tmp/y', content: 'hello' },
-  });
-  assert.equal(r.code, 0);
-  assert.equal(parseDecision(r.stdout), 'allow');
-  assert.ok(!fs.existsSync(pendingPath(sid)));
+test('Write without auto mode → writes pending (user reviews the diff)', async () => {
+  await expectWritesPending('test-write', 'Write', { file_path: '/tmp/y', content: 'hello' });
 });
 
 // ── Concurrent sessions ───────────────────────────────────────────────────────
@@ -311,8 +340,8 @@ test('concurrent sessions have independent state', async () => {
   resetAllowlist();
 
   // Use 'cp'/'mv' — not in SAFE_BASH_PREFIXES, so pending files are written
-  const hA = runHook({ session_id: sidA, tool_name: 'Bash', tool_input: { command: 'cp a.txt b.txt' } }, { POLL_TIMEOUT_MS: '5000' });
-  const hB = runHook({ session_id: sidB, tool_name: 'Bash', tool_input: { command: 'mv old.txt new.txt' } }, { POLL_TIMEOUT_MS: '5000' });
+  const hA = runHook({ session_id: sidA, tool_name: 'Bash', tool_input: { command: 'cp a.txt b.txt' } });
+  const hB = runHook({ session_id: sidB, tool_name: 'Bash', tool_input: { command: 'mv old.txt new.txt' } });
 
   await new Promise((r) => setTimeout(r, 600));
   assert.ok(fs.existsSync(pendingPath(sidA)));
