@@ -73,51 +73,109 @@ else
   fail "WakaWaka 啟動失敗，請執行 swift build 確認無錯誤"
 fi
 
-# ── Step 4: 寫入 Claude Code hook（並清理舊路徑）────────────
+# ── Step 4: 寫入 Claude Code hooks（並清理舊路徑）───────────
 mkdir -p "$HOME/.claude"
 [[ -f "$CLAUDE_SETTINGS" ]] || echo '{}' > "$CLAUDE_SETTINGS"
 
 NODE_BIN=$(command -v node 2>/dev/null || echo "node")
-HOOK_CMD="$NODE_BIN $HOOK"
+HOOKS_DIR="$REPO/cost-aware-approval/hooks"
 
-RESULT=$(python3 - "$CLAUDE_SETTINGS" "$HOOK_CMD" <<'PYEOF'
-import json, sys
+RESULT=$(python3 - "$CLAUDE_SETTINGS" "$NODE_BIN" "$HOOKS_DIR" <<'PYEOF'
+import json, os, sys
 
-path, hook_cmd = sys.argv[1], sys.argv[2]
+path, node_bin, hooks_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# PreToolUse gates every tool call; the other four keep the active-agents panel
+# current. Only PreToolUse blocks — the lifecycle hooks write a small file and
+# exit, so they cost one short-lived process per session or per turn.
+REGISTRATIONS = [
+    ("PreToolUse",       "pretooluse.mjs"),
+    ("SessionStart",     "sessionstart.mjs"),
+    ("UserPromptSubmit", "userpromptsubmit.mjs"),
+    ("Stop",             "stop.mjs"),
+    ("SessionEnd",       "sessionend.mjs"),
+]
+
+# This rewrites the user's whole settings file, so a file we cannot parse is a
+# reason to stop, not a reason to start over: `cfg = {}` here would silently
+# replace every unrelated Claude setting with WakaWaka's five hooks.
 try:
     with open(path) as f:
         cfg = json.load(f)
-except Exception:
+except FileNotFoundError:
     cfg = {}
+except Exception as err:
+    print(f"error:{err}")
+    sys.exit(0)
 
-pre = cfg.setdefault("hooks", {}).setdefault("PreToolUse", [])
+if not isinstance(cfg, dict):
+    print("error:settings.json is not a JSON object")
+    sys.exit(0)
 
-# Drop any prior WakaWaka registration (matched by the hook SCRIPT path, not the
-# full command) so a changed node binary path can't leave a stale duplicate
-# entry. Two blocking hooks would race on the same decision file and starve one
-# another into a timeout-deny.
-def is_wakawaka(entry):
-    return any("pretooluse.mjs" in h.get("command", "") for h in entry.get("hooks", []))
+hooks = cfg.setdefault("hooks", {})
+if not isinstance(hooks, dict):
+    print("error:settings.json 'hooks' is not a JSON object")
+    sys.exit(0)
 
-already = any(
-    h.get("command") == hook_cmd
-    for entry in pre for h in entry.get("hooks", [])
-)
-pre[:] = [entry for entry in pre if not is_wakawaka(entry)]
-pre.append({"matcher": "*", "hooks": [{"type": "command", "command": hook_cmd}]})
+unchanged = True
 
-with open(path, "w") as f:
+# Identifies OUR registration by its repo-relative path rather than by the
+# script's basename. Names like `stop.mjs` are generic enough that a substring
+# match on the basename alone would delete an unrelated third-party hook.
+def is_wakawaka(command, script):
+    return f"cost-aware-approval/hooks/{script}" in command
+
+for event, script in REGISTRATIONS:
+    command = f"{node_bin} {hooks_dir}/{script}"
+    entries = hooks.setdefault(event, [])
+    if not isinstance(entries, list):
+        print(f"error:settings.json hooks.{event} is not a list")
+        sys.exit(0)
+
+    if not any(h.get("command") == command
+               for entry in entries if isinstance(entry, dict)
+               for h in entry.get("hooks", []) if isinstance(h, dict)):
+        unchanged = False
+
+    # Strip prior WakaWaka registrations command-by-command so a mixed entry
+    # keeps its other hooks, and drop an entry only once it is empty. Matching
+    # by path rather than by the full command means a changed node binary
+    # cannot leave a stale duplicate behind — for PreToolUse that matters most:
+    # two blocking hooks would race on the same decision file and starve one
+    # another into a timeout-deny.
+    pruned = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            pruned.append(entry)
+            continue
+        kept = [h for h in entry.get("hooks", [])
+                if not (isinstance(h, dict) and is_wakawaka(h.get("command", ""), script))]
+        if len(kept) == len(entry.get("hooks", [])):
+            pruned.append(entry)
+        elif kept:
+            pruned.append({**entry, "hooks": kept})
+    entries[:] = pruned
+    entries.append({"matcher": "*", "hooks": [{"type": "command", "command": command}]})
+
+# Write to a sibling temp file and rename, so an interrupted write cannot leave
+# the user with a truncated settings.json.
+tmp = f"{path}.wakawaka.tmp"
+with open(tmp, "w") as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
     f.write("\n")
+os.replace(tmp, path)
 
-print("skip" if already else "done")
+print("skip" if unchanged else "done")
 PYEOF
 )
 
-if [[ "$RESULT" == "skip" ]]; then
-  ok "Claude Code hook 已設定（略過）"
+if [[ "$RESULT" == error:* ]]; then
+  warn "Claude Code hooks 未寫入：${RESULT#error:}"
+  warn "  → 修好 $CLAUDE_SETTINGS 後重跑，settings.json 未被更動"
+elif [[ "$RESULT" == "skip" ]]; then
+  ok "Claude Code hooks 已設定（略過）"
 else
-  ok "Hook 已寫入 $CLAUDE_SETTINGS"
+  ok "Hooks 已寫入 $CLAUDE_SETTINGS（PreToolUse + 4 個 lifecycle）"
   echo "   → node: $NODE_BIN"
 fi
 

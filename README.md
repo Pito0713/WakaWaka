@@ -87,9 +87,14 @@ WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依�
 ```
 cost-aware-approval/
 ├── hooks/
-│   ├── pretooluse.mjs          # Claude Code PreToolUse hook
+│   ├── pretooluse.mjs          # Claude Code PreToolUse hook（順帶寫 agent 心跳）
 │   ├── pretooluse-codex.mjs    # Codex PreToolUse adapter
-│   └── pretooluse-agy.mjs      # agy (Antigravity CLI) PreToolUse hook
+│   ├── pretooluse-agy.mjs      # agy (Antigravity CLI) PreToolUse hook
+│   ├── agent-registry.mjs      # active-agents registry 共用模組（原子寫入、pid 解析）
+│   ├── sessionstart.mjs        # session 開始 → 建立 registry 檔
+│   ├── userpromptsubmit.mjs    # 使用者送出 → working（並記錄 slash command 名稱）
+│   ├── stop.mjs                # 回合結束 → idle
+│   └── sessionend.mjs          # session 結束 → 刪除 registry 檔
 ├── parser/
 │   ├── usage-calculator.ts     # Token 用量計算（兩遍掃描 + global dedup）
 │   ├── p90-detector.ts         # 歷史 peak 分析 → 方案上限自動估算
@@ -98,6 +103,9 @@ cost-aware-approval/
     └── Sources/WakaWaka/
         ├── AppDelegate.swift       # 主控：1s 輪詢 + 60s session 刷新 + 10m /usage 校正
         ├── ContentView.swift       # 待審批佇列 UI（agent badge、展開全文）
+        ├── AgentRegistry.swift     # registry 檔案格式、顯示模型、pid 存活判定
+        ├── AgentRegistryService.swift # registry 讀取、pid 驗證、崩潰殘留清理
+        ├── ActiveAgentsView.swift  # ACTIVE AGENTS 面板（釘在待審批佇列上方）
         ├── SessionStatusView.swift # 5h 用量進度條 + 重置倒數 + server 驗證綠點
         ├── PopoverViewModel.swift  # UI 狀態管理（含 claudeUsageInfo、agyQuota）
         ├── AgyQuotaService.swift   # agy local language server quota 查詢（port 探測 + HTTP）
@@ -107,7 +115,7 @@ cost-aware-approval/
         └── Models.swift            # PendingData、UsageOutput、ClaudeUsageInfo、P90Result
 
 ~/.gemini/config/hooks.json         # agy 全局 hook 配置（指向 pretooluse-agy.mjs）
-~/.claude/settings.json             # Claude Code hook 配置（指向 pretooluse.mjs）
+~/.claude/settings.json             # Claude Code hook 配置（PreToolUse + 4 個 lifecycle）
 .codex/hooks.json                   # Codex 專案 hook 配置（指向 pretooluse-codex.mjs）
 ```
 
@@ -376,6 +384,37 @@ P90 偵測在以下情況會有大誤差：
 ## Changelog
 
 版本格式：`v主版本.功能版本.修補版本`，遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/) 規範。
+
+---
+
+### v0.17.0 — 2026-08-14
+
+對應 `active-agents-plan.md` 全部七個階段。popover 頂端新增「ACTIVE AGENTS」面板，顯示現在有哪些 agent session 活著、在做什麼。
+
+#### Added
+
+- **Agent registry（`hooks/agent-registry.mjs` + 四個 lifecycle hook）**：`SessionStart` / `UserPromptSubmit` / `Stop` / `SessionEnd` 各寫一個 `~/.wakawaka/state/agent_<kind>_<session>.json`，`PreToolUse` 順帶更新心跳。原子寫入（temp + rename）、權限 0600、帶 schema 版本。
+- **以 pid 判定存活，而非以時間新舊**：崩潰的 agent 留下的檔案與「活著但閒置」完全一樣，靠 heartbeat 時間永遠分不出來——舊設計會把幾週前的 session 顯示成執行中。改為 `kill(pid,0)` 加上比對行程啟動時間（pid 會被回收，光是活著不算證據）。
+- **`ActiveAgentsView`**：每列顯示專案、branch、狀態燈、最後工具或執行中的 skill、心跳時間。完整路徑只放 tooltip。最多 5 列，其餘顯示「+N more」。
+- **面板永不靜默失敗**：讀不到狀態目錄時顯示原因，而不是顯示成「沒有 agent 在跑」——後者與正常空面板無法區分。
+- **`WAKAWAKA_INTERNAL=1` 自我遞迴防護**：app 自己 spawn 的 parser / `claude -p` 不得被登記成 agent。
+
+#### Fixed
+
+以下由 Codex 對照驗證後找出（0 BLOCKER、4 HIGH、5 MEDIUM、2 LOW；其中 1 條 HIGH 經驗證為誤報）：
+
+- **pid 起始時間讀不到時永久信任**：一個死掉的 session 只要 pid 被任何行程回收，就會永遠留在面板上——正是 pid 檢查本身要防的失效。改為 `alive` / `gone` / `unverifiable` 三態，無法證明身分的只信任到 `staleThreshold`（30 分）為止。該常數原本宣告了卻從未被使用。
+- **`start.sh` 會刪掉第三方 hook**：比對用的是 script basename 子字串，而 `stop.mjs`、`sessionend.mjs` 這種名稱極易碰撞——一個位於 `/opt/security-audit/stop.mjs` 的無關 hook 會連同整個 entry 被移除。改為比對 repo 相對路徑，並逐一過濾 hook 而非整筆刪除，同 entry 的其他 hook 得以保留。
+- **`settings.json` 解析失敗會被整檔覆寫**：任何讀取或 JSON 錯誤都走 `cfg = {}` 再寫回，等於用 WakaWaka 的五個 hook 取代使用者全部設定。改為中止並回報，且改用 temp + rename 原子寫入。
+- **狀態目錄讀取失敗被當成「沒有 agent」**：`.unavailable` / `.permissionDenied` 在正式路徑從未被建構過，前述「永不靜默失敗」的設計實際上是空的。目錄列舉的錯誤現在會傳進 snapshot。
+- **`tool_input.skill` 未經驗證就落地**：該值由模型撰寫且無長度限制，違反 registry「只存 metadata」的承諾。改為套用與 slash command 相同的識別字文法。
+- **popover 高度沒算進新面板**：底部的 Auto 列與用量條被裁掉；且高度只在待審批佇列變動時重算，agent 變動時不會。改為以 `NSHostingView.fittingSize` 實際量測（手估常數每列短 2pt），並在 snapshot 變動時觸發重算。
+- **`SourceStatus.ok` 帶著掃描時間戳**：整個 snapshot 是 `Equatable`，這使每次輪詢都比較不相等，面板每秒重新發布與重新排版一次。該欄位無人讀取，已移除。
+- **registry 檔案讀取無防護**：加入 regular-file 檢查與 64KB 上限——輪詢跑在主執行緒，一個 fifo 會直接卡死整個 app。
+
+#### Changed
+
+- `parentOf(pid)` 更名為 `procInfo(pid)` 並回傳 `{ppid, comm}`。原本回傳 `{pid: 父pid, comm: 該 pid 自己的 comm}`，兩個欄位描述不同行程卻都叫 `parent`——驗證時雙方都據此誤判邏輯有錯並「修正」成真正的 bug，行程樹測試才揭穿。原邏輯正確，改的是命名。
 
 ---
 

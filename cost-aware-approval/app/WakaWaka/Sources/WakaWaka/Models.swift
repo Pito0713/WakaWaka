@@ -70,6 +70,10 @@ enum ApprovalEnforcement: String, Decodable {
 
 struct PendingData: Decodable {
     let session_id: String?
+    /// Codex only. Its `session_id` is the approval's own UUID, so this is the
+    /// field that identifies the session — the key the active-agents panel
+    /// needs to match an approval back to the agent waiting on it.
+    let codex_session_id: String?
     let tool_name: String?
     let risk_level: RiskLevel?   // nil → medium (non-Bash tools)
     /// Missing in older pending files; nil preserves the legacy review flow.
@@ -116,6 +120,7 @@ struct PendingData: Decodable {
         case hookExited, hookExitedAt
         case hookUrgent
         case agent
+        case codex_session_id
     }
 
     init(from decoder: Decoder) throws {
@@ -130,6 +135,7 @@ struct PendingData: Decodable {
         hookExitedAt    = try c.decodeIfPresent(String.self,    forKey: .hookExitedAt)
         hookUrgent      = try c.decodeIfPresent(Bool.self,       forKey: .hookUrgent)
         agent           = try c.decodeIfPresent(String.self,    forKey: .agent)
+        codex_session_id = try c.decodeIfPresent(String.self,   forKey: .codex_session_id)
 
         let raw = try? c.decode([String: JSONValue].self, forKey: .tool_input)
         toolInputSummary      = Self.buildSummary(toolName: tool_name, raw: raw)

@@ -262,6 +262,13 @@ enum ParserRunner {
 
         let existing = env["PATH"] ?? "/usr/bin:/bin"
         env["PATH"] = (extras + [existing]).joined(separator: ":")
+
+        // Marks every child process as WakaWaka's own. `runClaudeUsage` shells
+        // out to `claude -p "/usage"` every ten minutes, which fires the same
+        // SessionStart/Stop hooks a real session does — without this the panel
+        // would list WakaWaka as an active agent, blinking on a timer. The
+        // lifecycle hooks check this variable and no-op.
+        env["WAKAWAKA_INTERNAL"] = "1"
         return env
     }
 

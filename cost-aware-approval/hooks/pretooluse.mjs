@@ -23,6 +23,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { recordToolUse } from './agent-registry.mjs';
 
 // Every runtime path is overridable so tests can point at a temp directory
 // instead of the live ~/.wakawaka. Without this the suite reads the user's
@@ -455,6 +456,19 @@ async function main() {
     decide('defer', 'Hook received malformed input');
     process.exit(0);
   }
+
+  // ── Active-agents heartbeat ───────────────────────────────────────────────
+  // Piggybacked on the hook that already runs for every tool call, so the most
+  // frequent event in the system costs no extra process. The result is never
+  // read, so no registry state can change what this hook decides, and the
+  // try/catch keeps a registry failure from changing its exit code.
+  //
+  // It does spend time, which the fast paths below did not: measured at
+  // 0.134 ms/call against ~24 ms of node startup for this very process and a
+  // 590 s decision budget. Blocking is the residual risk, and it is not a new
+  // one — Step 3 writes the pending file into the same STATE_DIR, so a
+  // directory that hangs takes approvals down whether or not this line runs.
+  try { recordToolUse(input); } catch { /* the panel is cosmetic; approvals are not */ }
 
   const { session_id: rawSid, tool_name, tool_input, transcript_path } = input ?? {};
 

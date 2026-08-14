@@ -26,6 +26,10 @@ final class PopoverViewModel: ObservableObject {
     /// agy quota from local language server (updated every 5 min)
     @Published var agyQuota: AgyQuota? = nil
 
+    /// Live agent sessions, refreshed by the same 1s poll that scans for
+    /// approvals. Empty is the normal state before any hooked session starts.
+    @Published var activeAgents: ActiveAgentsSnapshot = .empty
+
     /// Per-agent "auto mode" toggle state, mirrored from ~/.wakawaka/settings.json.
     /// AppDelegate owns the SettingsService round-trip (including the 30-min
     /// expiry sweep); this is just the UI's read-only reflection of it.

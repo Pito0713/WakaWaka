@@ -121,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Disable automatic sizing so our contentSize is respected
         if #available(macOS 13.0, *) { hc.sizingOptions = [] }
         popover.contentViewController = hc
-        popover.contentSize = NSSize(width: 480, height: 100)
+        popover.contentSize = NSSize(width: popoverWidth, height: 100)
 
         // Warm up the hosting view so the first popover show paints content
         // immediately instead of flashing an empty white frame.
@@ -676,9 +676,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let stateDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".wakawaka/state")
 
-        let urls = (try? FileManager.default.contentsOfDirectory(
-            at: stateDir, includingPropertiesForKeys: [.creationDateKey],
-            options: .skipsHiddenFiles)) ?? []
+        // The failure is kept, not discarded: an unreadable state directory and
+        // an empty one produce the same list, and the agents panel has to be
+        // able to tell the user which one it is looking at.
+        var scanError: Error?
+        var urls: [URL] = []
+        do {
+            urls = try FileManager.default.contentsOfDirectory(
+                at: stateDir, includingPropertiesForKeys: [.creationDateKey],
+                options: .skipsHiddenFiles)
+        } catch {
+            scanError = error
+        }
 
         let isoParser: ISO8601DateFormatter = {
             let f = ISO8601DateFormatter()
@@ -710,6 +719,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .sorted { $0.1 < $1.1 }
             .map { $0.0 }
+
+        // Active-agents panel: the registry files sit in the directory just
+        // enumerated, so this reuses that listing rather than walking again.
+        // Placed before the early return below — that guard only covers the
+        // approval queue, and skipping it here would freeze the panel.
+        let agents = AgentRegistryService.snapshot(from: urls, pending: newQueue, scanError: scanError)
+        if agents != viewModel.activeAgents {
+            viewModel.activeAgents = agents
+            // The approval queue may be unchanged, in which case this method
+            // returns below without refreshing anything — so resize here or the
+            // panel grows inside a popover that stays its old size.
+            updatePopoverHeight()
+        }
 
         typealias Snap = (sid: String, ts: String, urgent: Bool)
         let newSnaps: [Snap] = newQueue.map    { ($0.session_id ?? "", $0.timestamp ?? "", $0.hookUrgent ?? false) }
@@ -861,16 +883,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - ViewModel sync
 
+    private let popoverWidth: CGFloat = 480
+
     private func refreshViewModel() {
         viewModel.pendingItems = pendingQueue
+        updatePopoverHeight()
+    }
 
+    /// Last measurement, keyed by the snapshot it was taken for.
+    private var measuredAgentsHeight: (snapshot: ActiveAgentsSnapshot, height: CGFloat)?
+
+    /// Height of the ACTIVE AGENTS section, or zero when it is hidden.
+    ///
+    /// The rest of the popover sizes itself from hand-measured constants, and
+    /// that is exactly how this section's footer came to be clipped on the first
+    /// attempt: estimating from font sizes landed ~12pt short and the quota bars
+    /// fell off the bottom. Laying the real view out off-screen costs one pass
+    /// per snapshot change and cannot drift when the row design changes.
+    private var activeAgentsHeight: CGFloat {
+        let snapshot = viewModel.activeAgents
+        guard !snapshot.isEmpty else { return 0 }
+        if let cached = measuredAgentsHeight, cached.snapshot == snapshot { return cached.height }
+
+        // Same wrapper and width as ContentView, or the tuple of section+divider
+        // has no layout to be measured against.
+        let probe = VStack(alignment: .leading, spacing: 0) {
+            ActiveAgentsView(snapshot: snapshot)
+        }
+        .frame(width: popoverWidth)
+
+        let height = NSHostingView(rootView: probe).fittingSize.height
+        measuredAgentsHeight = (snapshot, height)
+        return height
+    }
+
+    private func updatePopoverHeight() {
         // Animate height change
         // dual-provider usage: title + Claude rows + divider + Codex rows + padding
         // PopoverFooter (shared by both states): divider + auto row + divider
         // + Claude 5h bar + Codex 7d bar + vertical padding.
         let footerH: CGFloat = 120
-        // idle: PacMan canvas + vertical padding
-        let idleH: CGFloat = 100
+        // idle: PacMan canvas + vertical padding. With agents on screen the
+        // PacMan is replaced by a single line, so the space it needs collapses.
+        let idleH: CGFloat = viewModel.activeAgents.isEmpty ? 100 : 34
         // "待審批" header: subheadline(~17) + vertical padding(20) + divider(1)
         let queueHeaderH: CGFloat = 38
         // collapsed row: tool name(~17) + summary(~13) + spacing(1) + vertical padding(20)
@@ -884,13 +939,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let targetH: CGFloat
         if pendingQueue.isEmpty {
-            targetH = idleH + footerH
+            targetH = activeAgentsHeight + idleH + footerH
         } else {
             let rowCount = CGFloat(pendingQueue.count)
             let listH = rowCount * queueRowH + max(0, rowCount - 1) * queueDividerH
             let detailH = viewModel.expandedIndex != nil ? expandedDetailH : 0
             let approvalH = min(listH + detailH, approvalMaxH)
-            targetH = queueHeaderH + approvalH + footerH
+            targetH = activeAgentsHeight + queueHeaderH + approvalH + footerH
         }
 
         if abs(popover.contentSize.height - targetH) > 1 {
@@ -898,12 +953,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSAnimationContext.runAnimationGroup { ctx in
                     ctx.duration = 0.22
                     ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                    popover.contentSize = NSSize(width: 480, height: targetH)
+                    popover.contentSize = NSSize(width: popoverWidth, height: targetH)
                 }
             } else {
                 // First show: size up front (no animation) so it opens with content
                 // already laid out at the right size instead of a blank frame.
-                popover.contentSize = NSSize(width: 480, height: targetH)
+                popover.contentSize = NSSize(width: popoverWidth, height: targetH)
             }
         }
     }
