@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pollingTimer: Timer?
 
     private let viewModel = PopoverViewModel()
+    /// Bumped by every agent scan so a slow one cannot overwrite a newer result.
+    private var agentScanGeneration = 0
     private var pendingQueue: [PendingData] = []
 
     // Per-session usage cache (avoid re-fetching if user collapses/expands)
@@ -113,6 +115,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.fetchCodexUsage()
         }
         viewModel.onOpenDashboard = { [weak self] in self?.showUsageDashboard() }
+        viewModel.onFocusAgent    = { [weak self] row in self?.focusAgentWindow(row) }
+        viewModel.onRefreshAgents = { [weak self] in self?.refreshAgents() }
 
         popover = NSPopover()
         popover.behavior = .applicationDefined
@@ -724,6 +728,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // enumerated, so this reuses that listing rather than walking again.
         // Placed before the early return below — that guard only covers the
         // approval queue, and skipping it here would freeze the panel.
+        agentScanGeneration += 1
         let agents = AgentRegistryService.snapshot(from: urls, pending: newQueue, scanError: scanError)
         if agents != viewModel.activeAgents {
             viewModel.activeAgents = agents
@@ -865,6 +870,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showPopover(ifNewItem: Bool) {
         refreshViewModel()
+        updatePopoverHeight(force: true)
         guard let button = statusItem.button else { return }
         if !popover.isShown {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
@@ -881,6 +887,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Do NOT activate the app — popover floats without stealing keyboard focus
     }
 
+    // MARK: - Active agents
+
+    /// Brings the agent's terminal forward. Runs off the main thread because it
+    /// shells out to `ps`, `tmux` and `osascript` — a few hundred milliseconds
+    /// on the UI thread would freeze the popover mid-click.
+    private func focusAgentWindow(_ row: ActiveAgentRow) {
+        setAgentFocusError(nil)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let outcome = AgentWindowFocus.focus(row)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.setAgentFocusError(outcome.message)
+                // Focusing another app means this popover is no longer wanted.
+                if outcome == .focused { self.popover.performClose(nil) }
+            }
+        }
+    }
+
+    /// The explanation is a line in the panel, so it changes the height —
+    /// setting it without resizing would clip the very message that exists to
+    /// tell the user what went wrong.
+    private func setAgentFocusError(_ message: String?) {
+        guard viewModel.agentFocusError != message else { return }
+        viewModel.agentFocusError = message
+        updatePopoverHeight()
+    }
+
+    /// Re-checks every agent immediately instead of waiting out the grace
+    /// period, then republishes. The pid checks are syscalls, but the directory
+    /// read is I/O, so it stays off the main thread.
+    private func refreshAgents() {
+        guard !viewModel.isRefreshingAgents else { return }
+        viewModel.isRefreshingAgents = true
+
+        // The 1 s poll keeps running while this works. Without a generation the
+        // slower background result would land last and overwrite a newer
+        // snapshot, briefly resurrecting rows the poll had already dropped.
+        agentScanGeneration += 1
+        let generation = agentScanGeneration
+        let pending = pendingQueue
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let stateDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".wakawaka/state")
+            var scanError: Error?
+            var urls: [URL] = []
+            do {
+                urls = try FileManager.default.contentsOfDirectory(
+                    at: stateDir, includingPropertiesForKeys: [.creationDateKey],
+                    options: .skipsHiddenFiles)
+            } catch {
+                scanError = error
+            }
+            let snapshot = AgentRegistryService.snapshot(
+                from: urls, pending: pending, scanError: scanError, forceVerify: true)
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.viewModel.isRefreshingAgents = false
+                guard generation == self.agentScanGeneration else { return }
+                if snapshot != self.viewModel.activeAgents {
+                    self.viewModel.activeAgents = snapshot
+                    self.updatePopoverHeight()
+                }
+            }
+        }
+    }
+
     // MARK: - ViewModel sync
 
     private let popoverWidth: CGFloat = 480
@@ -890,77 +963,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updatePopoverHeight()
     }
 
-    /// Last measurement, keyed by the snapshot it was taken for.
-    private var measuredAgentsHeight: (snapshot: ActiveAgentsSnapshot, height: CGFloat)?
-
-    /// Height of the ACTIVE AGENTS section, or zero when it is hidden.
-    ///
-    /// The rest of the popover sizes itself from hand-measured constants, and
-    /// that is exactly how this section's footer came to be clipped on the first
-    /// attempt: estimating from font sizes landed ~12pt short and the quota bars
-    /// fell off the bottom. Laying the real view out off-screen costs one pass
-    /// per snapshot change and cannot drift when the row design changes.
-    private var activeAgentsHeight: CGFloat {
-        let snapshot = viewModel.activeAgents
-        guard !snapshot.isEmpty else { return 0 }
-        if let cached = measuredAgentsHeight, cached.snapshot == snapshot { return cached.height }
-
-        // Same wrapper and width as ContentView, or the tuple of section+divider
-        // has no layout to be measured against.
-        let probe = VStack(alignment: .leading, spacing: 0) {
-            ActiveAgentsView(snapshot: snapshot)
-        }
-        .frame(width: popoverWidth)
-
-        let height = NSHostingView(rootView: probe).fittingSize.height
-        measuredAgentsHeight = (snapshot, height)
-        return height
-    }
-
-    private func updatePopoverHeight() {
-        // Animate height change
-        // dual-provider usage: title + Claude rows + divider + Codex rows + padding
-        // PopoverFooter (shared by both states): divider + auto row + divider
-        // + Claude 5h bar + Codex 7d bar + vertical padding.
-        let footerH: CGFloat = 120
-        // idle: PacMan canvas + vertical padding. With agents on screen the
-        // PacMan is replaced by a single line, so the space it needs collapses.
-        let idleH: CGFloat = viewModel.activeAgents.isEmpty ? 100 : 34
-        // "待審批" header: subheadline(~17) + vertical padding(20) + divider(1)
-        let queueHeaderH: CGFloat = 38
-        // collapsed row: tool name(~17) + summary(~13) + spacing(1) + vertical padding(20)
-        let queueRowH: CGFloat = 51
-        // inter-row divider
-        let queueDividerH: CGFloat = 1
-        let expandedDetailH: CGFloat = 340
-        // Approval list scrolls internally past this cap — mirrors ContentView's
-        // ScrollView `.frame(maxHeight: 440)`, so the footer never gets pushed off.
-        let approvalMaxH: CGFloat = 440
-
-        let targetH: CGFloat
-        if pendingQueue.isEmpty {
-            targetH = activeAgentsHeight + idleH + footerH
-        } else {
-            let rowCount = CGFloat(pendingQueue.count)
-            let listH = rowCount * queueRowH + max(0, rowCount - 1) * queueDividerH
-            let detailH = viewModel.expandedIndex != nil ? expandedDetailH : 0
-            let approvalH = min(listH + detailH, approvalMaxH)
-            targetH = activeAgentsHeight + queueHeaderH + approvalH + footerH
-        }
-
-        if abs(popover.contentSize.height - targetH) > 1 {
-            if popover.isShown {
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.22
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                    popover.contentSize = NSSize(width: popoverWidth, height: targetH)
-                }
-            } else {
-                // First show: size up front (no animation) so it opens with content
-                // already laid out at the right size instead of a blank frame.
-                popover.contentSize = NSSize(width: popoverWidth, height: targetH)
-            }
-        }
+    /// - Parameter force: measure even while the popover is closed, for the
+    ///   moment just before it opens. Its size is unobservable until then, so
+    ///   every other poll skips the work entirely.
+    private func updatePopoverHeight(force: Bool = false) {
+        guard force || popover.isShown else { return }
+        PopoverSizing.apply(to: popover, model: viewModel,
+                            width: popoverWidth, animated: popover.isShown)
     }
 
     // MARK: - Decisions (any queue index)

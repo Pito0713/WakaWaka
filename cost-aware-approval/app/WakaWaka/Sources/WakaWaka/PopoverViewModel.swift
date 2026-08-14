@@ -29,6 +29,10 @@ final class PopoverViewModel: ObservableObject {
     /// Live agent sessions, refreshed by the same 1s poll that scans for
     /// approvals. Empty is the normal state before any hooked session starts.
     @Published var activeAgents: ActiveAgentsSnapshot = .empty
+    /// True while a forced re-verification is in flight (it shells out).
+    @Published var isRefreshingAgents: Bool = false
+    /// Why the last click could not reach a window; nil when it worked.
+    @Published var agentFocusError: String? = nil
 
     /// Per-agent "auto mode" toggle state, mirrored from ~/.wakawaka/settings.json.
     /// AppDelegate owns the SettingsService round-trip (including the 30-min
@@ -49,6 +53,10 @@ final class PopoverViewModel: ObservableObject {
     var onToggleAutoMode: (AutoModeAgent, Bool) -> Void = { _, _ in }
     /// User tapped the "usage dashboard" button; AppDelegate opens the window.
     var onOpenDashboard: () -> Void = {}
+    /// User clicked an agent row; bring its terminal to the front.
+    var onFocusAgent: (ActiveAgentRow) -> Void = { _ in }
+    /// User asked for an immediate liveness re-check of every agent.
+    var onRefreshAgents: () -> Void = {}
 
     /// Mirrors a freshly-loaded settings snapshot into the published UI state.
     func applyAutoMode(from settings: WakaWakaSettings) {

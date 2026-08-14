@@ -182,6 +182,47 @@ struct AgentRegistryServiceTests {
         #expect(!FileManager.default.fileExists(atPath: url.path), "and the file is swept")
     }
 
+    /// A row is trusted for up to a minute without a pid check, so by the time
+    /// it is clicked the process may be gone and its pid reused. The click path
+    /// re-verifies, which needs the start time to be on the row.
+    @Test func aRowCarriesWhatIsNeededToProveItsProcess() throws {
+        let dir = try makeStateDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeEntry(in: dir)
+
+        let row = AgentRegistryService.snapshot(from: try listing(dir), pending: []).rows[0]
+        #expect(row.pid == ProcessInfo.processInfo.processIdentifier)
+        #expect(row.pidStartedAt == ProcessLiveness.startedAt(pid: row.pid))
+        #expect(ProcessLiveness.check(pid: row.pid, startedAt: row.pidStartedAt) == .alive)
+    }
+
+    /// The writer replaces entries atomically, so between reading a file and
+    /// deciding to delete it the agent may have re-registered at the same path.
+    /// Deleting that replacement is permanent: the lifecycle hooks update
+    /// entries but refuse to create them, so the session would never come back.
+    @Test func aFileReplacedAfterBeingReadIsNotDeleted() throws {
+        let dir = try makeStateDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = try writeEntry(in: dir)
+
+        func modifiedAt() throws -> Date {
+            try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as! Date
+        }
+
+        // What the scan saw, then the replacement landing underneath it.
+        let asRead = try modifiedAt()
+        try FileManager.default.setAttributes(
+            [.modificationDate: asRead.addingTimeInterval(1)], ofItemAtPath: url.path)
+
+        AgentRegistryService.removeIfUnchanged(url, since: asRead)
+        #expect(FileManager.default.fileExists(atPath: url.path),
+                "a file rewritten since it was read is somebody else's now")
+
+        // Unchanged since the read: this is the entry that was judged dead.
+        AgentRegistryService.removeIfUnchanged(url, since: try modifiedAt())
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
+
     // MARK: - Degraded reads must not look like "no agents"
 
     @Test func anUnreadableDirectoryIsReportedRatherThanShownAsEmpty() {

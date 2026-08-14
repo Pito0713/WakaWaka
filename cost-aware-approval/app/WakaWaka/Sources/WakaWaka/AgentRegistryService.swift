@@ -42,7 +42,8 @@ enum AgentRegistryService {
         from urls: [URL],
         pending: [PendingData],
         now: Date = Date(),
-        scanError: Error? = nil
+        scanError: Error? = nil,
+        forceVerify: Bool = false
     ) -> ActiveAgentsSnapshot {
         if let scanError { return ActiveAgentsSnapshot(rows: [], status: status(for: scanError)) }
 
@@ -62,7 +63,9 @@ enum AgentRegistryService {
                 schemaMismatch = entry.schema
                 continue
             }
-            guard isAlive(entry, now: now, removing: url) else { continue }
+            guard isAlive(entry, now: now, removing: url,
+                          modifiedAt: modificationDate(of: url), forceVerify: forceVerify)
+            else { continue }
 
             rows.append(makeRow(entry, blocked: blocked))
         }
@@ -128,11 +131,15 @@ enum AgentRegistryService {
 
     /// Decides whether an entry represents a live session, deleting the file
     /// when it clearly does not.
-    private static func isAlive(_ entry: AgentRegistryEntry, now: Date, removing url: URL) -> Bool {
+    private static func isAlive(_ entry: AgentRegistryEntry, now: Date, removing url: URL,
+                                modifiedAt: Date?, forceVerify: Bool) -> Bool {
         let quietFor = now.timeIntervalSince(entry.heartbeatAt)
 
-        // Recently active: trust it without spending syscalls.
-        if quietFor < livenessGracePeriod { return true }
+        // Recently active: trust it without spending syscalls. A manual refresh
+        // skips this — the reason to press it is a row that looks wrong, and
+        // waiting out the grace period is exactly what the user is trying to
+        // avoid.
+        if !forceVerify, quietFor < livenessGracePeriod { return true }
 
         switch ProcessLiveness.check(pid: entry.pid, startedAt: entry.pidStartedAt) {
         case .alive:
@@ -150,9 +157,25 @@ enum AgentRegistryService {
             break
         }
 
-        // Remove the file so the next scan is cheaper and the row cannot reappear.
-        try? FileManager.default.removeItem(at: url)
+        removeIfUnchanged(url, since: modifiedAt)
         return false
+    }
+
+    private static func modificationDate(of url: URL) -> Date? {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    }
+
+    /// Deletes only the file that was actually judged dead.
+    ///
+    /// The writer replaces entries atomically, so between reading one and
+    /// deciding to delete it the agent may have re-registered under the same
+    /// name. Deleting that replacement would be permanent: the lifecycle hooks
+    /// update entries but refuse to create them, so the session would never
+    /// come back until it restarted.
+    static func removeIfUnchanged(_ url: URL, since modifiedAt: Date?) {
+        guard let modifiedAt, let current = modificationDate(of: url), current == modifiedAt
+        else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     /// Sessions currently blocked on an approval, keyed the way the registry is.
@@ -184,6 +207,8 @@ enum AgentRegistryService {
         return ActiveAgentRow(
             id: id,
             kind: entry.kind,
+            pid: entry.pid,
+            pidStartedAt: entry.pidStartedAt,
             projectName: sanitize(lastPathComponent(entry.cwd), limit: 28),
             fullPath: sanitize(entry.cwd, limit: 120),
             gitBranch: entry.gitBranch.map { sanitize($0, limit: 24) },

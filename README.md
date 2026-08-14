@@ -17,6 +17,7 @@ WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依�
 
 | 功能                 | 說明                                                                                                     |
 | -------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Active Agents 面板** | popover 頂端列出現在活著的 agent session：專案、branch、狀態、正在跑的工具或 skill。以 pid 判定存活而非時間新舊，崩潰的 session 會消失而不是繼續顯示。點一列即切換到該 agent 的終端機視窗；旁邊的刷新鈕強制重新檢查所有行程 |
 | **三層風險分類**     | CRITICAL → HIGH → MEDIUM；各 agent adapter 採 fail-closed 策略，Codex 的 CRITICAL shell 操作會立即拒絕 |
 | **Auto 模式**        | per-agent 開關；開啟後自動放行白名單 MEDIUM（Edit/Write/MultiEdit + 未知 bash），HIGH/CRITICAL 與 MCP 仍彈窗；30 分鐘 TTL + fail-closed 稽核（`~/.wakawaka/auto-audit.jsonl`） |
 | **多代理支援**       | 同時守護 Claude Code、Codex 與 agy，agent badge 顯示工具呼叫來源                                         |
@@ -42,6 +43,9 @@ WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依�
 │                              │ write pending_<sid>.json      │
 │                              ▼  agent: "claude-code"         │
 │                    ~/.wakawaka/state/                        │
+│                              ▲                               │
+│  SessionStart / UserPromptSubmit / Stop / SessionEnd         │
+│         └──► agent_<kind>_<sid>.json（活躍 agent 登記）      │
 └──────────────────────────────────────────────────────────────┘
                                         │
 ┌──────────────────────────────────────────────────────────────┐
@@ -75,10 +79,14 @@ WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依�
 │          ▼                                                   │
 │  ┌──────────────────────────────────────┐                   │
 │  │  PopoverViewModel + ContentView      │                   │
+│  │  - ACTIVE AGENTS 面板（pid 驗證存活） │                   │
 │  │  - 待審批佇列（agent badge 顏色區分）  │                   │
 │  │  - 5h 用量進度條 + server 驗證綠點    │                   │
 │  │  - diff 展開全文 toggle              │                   │
 │  └──────────────────────────────────────┘                   │
+│          │ 點擊 agent 列                                     │
+│          ▼                                                   │
+│  AgentWindowFocus ──► tmux grouped session / Terminal.app    │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -106,6 +114,8 @@ cost-aware-approval/
         ├── AgentRegistry.swift     # registry 檔案格式、顯示模型、pid 存活判定
         ├── AgentRegistryService.swift # registry 讀取、pid 驗證、崩潰殘留清理
         ├── ActiveAgentsView.swift  # ACTIVE AGENTS 面板（釘在待審批佇列上方）
+        ├── AgentWindowFocus.swift  # 點擊列 → 開啟該 agent 的終端機視窗（tmux / Terminal.app）
+        ├── PopoverSizing.swift     # popover 高度：向 SwiftUI 量測，不用常數加總
         ├── SessionStatusView.swift # 5h 用量進度條 + 重置倒數 + server 驗證綠點
         ├── PopoverViewModel.swift  # UI 狀態管理（含 claudeUsageInfo、agyQuota）
         ├── AgyQuotaService.swift   # agy local language server quota 查詢（port 探測 + HTTP）
@@ -384,6 +394,35 @@ P90 偵測在以下情況會有大誤差：
 ## Changelog
 
 版本格式：`v主版本.功能版本.修補版本`，遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/) 規範。
+
+---
+
+### v0.18.0 — 2026-08-14
+
+Active Agents 面板可互動：點一列切到該 agent 的終端機，旁邊的刷新鈕強制重新檢查存活。連同 popover 版面的修正。
+
+#### Added
+
+- **點擊 agent 列開啟它的終端機視窗**。pid 到視窗不是一跳就到：tmux 裡的 agent 與 pane 共用 tty，而那個 pane 只有在有 client 連著時才在螢幕上——要抬起的視窗屬於 client 而非 agent。`AgentWindowFocus.swift` 處理兩跳，支援 tmux 與 Terminal.app；其他終端（含 VS Code 內建面板）沒有可靠的外部聚焦 API，會明說不支援而非靜默失敗。
+- **面板刷新鈕**：面板本來就每秒更新，但新鮮的 entry 會跳過 pid 檢查（60 秒寬限期），所以崩潰的 agent 最多殘留一分鐘。刷新強制驗證每個行程，跳過寬限期。
+- **`PopoverSizing`**：popover 高度改為向 SwiftUI 量測（`NSHostingView.fittingSize`）。抽成獨立型別是為了能對真的 `NSPopover` 斷言 `contentSize`——在 `AppDelegate` 裡量 `ContentView` 的測試，改回常數加總照樣會綠。
+
+#### Fixed
+
+- **popover 高度沒算進 ACTIVE AGENTS 面板**，底部的 Auto 列與用量條被裁掉；而且只在待審批佇列變動時重算，agent 變動時不會。手估常數已連續錯兩次（面板整個漏算；footer 實際 132pt 但常數寫 120），無 agent 時兩個誤差恰好抵消所以第一次沒被發現——改為量測後這類誤差不可能再發生。
+- **有 agent 時 PacMan 動畫被換成一行文字**。理由是「agent 在跑還顯示 PacMan 會矛盾」，但那是實作者的判斷，不是使用者要的。已無條件恢復。
+- **用量條貼底**：footer 下緣 padding 10 → 16。
+
+以下由 Codex 對照驗證後找出（0 BLOCKER、2 HIGH、4 MEDIUM、2 LOW，全數為真）：
+
+- **點擊會搶走使用者當前 tmux 畫面**。第一版用 `switch-client`，那會搬動使用者正坐著的 client。改用 grouped session 後仍然只對了一半：current-window 是 per-session（安全），但 **active pane 是 window 的屬性**，grouped session 共用 window——實測 `select-pane` 會改到別人的鍵盤焦點，tmux 的 `active-pane` client flag 也擋不住。因此不再選 pane：新視窗開在該 agent 的 tmux window 上，pane 看得見但不奪焦。
+- **3 秒逾時永遠不會觸發**：`readDataToEndOfFile()` 等的是 EOF，而 EOF 通常在子行程結束才來，所以卡住的 `tmux` / `osascript` 會永久佔住一個 worker。改為背景排空 + 獨立等待逾時。
+- **pid 回收可能開到無關行程的視窗**：列最多 60 秒未經 pid 驗證。`ActiveAgentRow` 補上 `pidStartedAt`，點擊當下重新驗證身分。
+- **tmux 失敗被當成成功**：`do script` 只證明 Terminal 收下了字串，不代表指令成功。grouped session 改為先以 argv 建立並驗證再 attach；重用路徑也檢查回傳值。
+- **檢視用的 session 名稱可能撞到使用者自己的 session**：改用 per-install token 命名，並加上 `@wakawaka-view` 擁有權標記，重用或刪除前都必須驗證。
+- **focus 失敗訊息會改變版面卻不重算高度**——與上面同一類缺陷，訊息本身可能被裁掉。
+- **手動刷新可能以較舊的快照覆蓋較新的輪詢結果**：加入 generation 守衛。
+- **讀檔與刪檔之間 agent 若重新註冊，會刪掉活的檔案**。後果是永久的：lifecycle hook 只更新不建立，該 session 到重啟前都不會再出現。改為刪除前比對 modification date。
 
 ---
 

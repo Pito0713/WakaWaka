@@ -11,19 +11,31 @@ import SwiftUI
 /// empty panel is indistinguishable from a working one.
 struct ActiveAgentsView: View {
     let snapshot: ActiveAgentsSnapshot
+    /// Bring this agent's terminal to the front. Defaults to nothing so the
+    /// layout tests can build the view without a host.
+    var onFocus: (ActiveAgentRow) -> Void = { _ in }
+    /// Re-scan now, verifying every process rather than trusting the grace period.
+    var onRefresh: () -> Void = {}
+    var isRefreshing: Bool = false
+    /// Why the last click did not reach a window. Shown rather than swallowed:
+    /// a click that silently does nothing reads as a broken panel.
+    var focusError: String? = nil
 
     var body: some View {
         if !snapshot.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 ForEach(snapshot.rows.prefix(AgentRegistryService.maxRows)) { row in
-                    AgentRow(row: row)
+                    AgentRow(row: row, onFocus: { onFocus(row) })
                 }
                 if snapshot.rows.count > AgentRegistryService.maxRows {
                     overflowNote(snapshot.rows.count - AgentRegistryService.maxRows)
                 }
                 if let message = snapshot.status.message {
                     statusNote(message)
+                }
+                if let focusError {
+                    statusNote(focusError)
                 }
             }
             .padding(.vertical, 8)
@@ -46,9 +58,30 @@ struct ActiveAgentsView: View {
                     .foregroundStyle(.secondary)
                     .clipShape(Capsule())
             }
+            refreshButton
         }
         .padding(.horizontal, 14)
         .padding(.bottom, 6)
+    }
+
+    /// The panel already refreshes every second, but a row only disappears once
+    /// its process fails a check — and fresh-looking entries skip that check.
+    /// This forces one, which is the difference between "wait a minute" and
+    /// "tell me now" after an agent has crashed.
+    private var refreshButton: some View {
+        Button(action: onRefresh) {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                .animation(isRefreshing
+                           ? .linear(duration: 0.8).repeatForever(autoreverses: false)
+                           : .default,
+                           value: isRefreshing)
+        }
+        .buttonStyle(.plain)
+        .disabled(isRefreshing)
+        .help("重新檢查所有 agent 是否還活著")
     }
 
     private func overflowNote(_ count: Int) -> some View {
@@ -72,8 +105,18 @@ struct ActiveAgentsView: View {
 /// One agent: project and branch on top, what it is doing underneath.
 private struct AgentRow: View {
     let row: ActiveAgentRow
+    let onFocus: () -> Void
+
+    @State private var isHovering = false
 
     var body: some View {
+        Button(action: onFocus) { content }
+            .buttonStyle(.plain)
+            .background(isHovering ? Color.secondary.opacity(0.12) : .clear)
+            .onHover { isHovering = $0 }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Circle()
@@ -153,6 +196,7 @@ private struct AgentRow: View {
             let source = row.skillSource?.explanation ?? "skill"
             parts.append("Skill：\(skill)（\(source)）")
         }
+        parts.append("點一下切換到這個 agent 的終端機視窗")
         return parts.joined(separator: "\n")
     }
 

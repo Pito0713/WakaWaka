@@ -58,6 +58,11 @@ struct AgentRegistryEntry: Decodable {
 struct ActiveAgentRow: Identifiable, Equatable {
     let id: String            // "<kind>_<sessionId>"
     let kind: AgentKind
+    /// Kept so a click can find the terminal this agent is running in — with
+    /// the start time, because by then the row may be up to a minute old and a
+    /// recycled pid would send the click to a stranger's window.
+    let pid: Int32
+    let pidStartedAt: Int64?
     let projectName: String   // last path component; the full path is tooltip-only
     let fullPath: String
     let gitBranch: String?

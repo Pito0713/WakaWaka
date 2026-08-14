@@ -9,12 +9,16 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Pinned above the queue: which agents are alive right now is
             // context for the approvals below, not a separate screen.
-            ActiveAgentsView(snapshot: model.activeAgents)
+            ActiveAgentsView(
+                snapshot: model.activeAgents,
+                onFocus: { model.onFocusAgent($0) },
+                onRefresh: { model.onRefreshAgents() },
+                isRefreshing: model.isRefreshingAgents,
+                focusError: model.agentFocusError
+            )
 
             if model.pendingItems.isEmpty {
-                // PacMan is the "nothing at all is happening" state. With live
-                // agents on screen it would read as a contradiction.
-                if model.activeAgents.isEmpty { idleView } else { idleFooterOnly }
+                idleView
             } else {
                 // ── Header ──────────────────────────────────────────────
                 HStack {
@@ -79,15 +83,6 @@ struct ContentView: View {
         .padding(.vertical, 20)
     }
 
-    /// Shown when agents are running but nothing needs approving: the panel
-    /// above already says what is happening, so this only fills the gap.
-    private var idleFooterOnly: some View {
-        Text("No pending approval")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-    }
 }
 
 // MARK: - Queue row

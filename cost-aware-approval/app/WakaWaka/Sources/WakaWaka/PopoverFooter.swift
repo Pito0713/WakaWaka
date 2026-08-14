@@ -29,7 +29,11 @@ struct PopoverFooter: View {
                 codexBar
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.top, 10)
+            // The usage bars are the last thing in the popover; without a
+            // little more room underneath they read as clipped rather than
+            // finished.
+            .padding(.bottom, 16)
         }
     }
 
