@@ -394,6 +394,100 @@ test('kind and session id come from the right payload fields per agent', () => {
   }
 });
 
+/**
+ * A real Codex SessionStart payload, captured from `codex-cli 0.147.0`. It
+ * names no agent and spells the id exactly as Claude Code does, so the old
+ * rules filed every Codex session under `claude-code` — a Codex window either
+ * showed up wearing the wrong name or, once `SessionEnd` deleted the entry
+ * under a key nothing else used, not at all.
+ */
+test('a real Codex payload is told apart from a Claude Code one', () => {
+  const { root, stateDir } = tempStateDir();
+  try {
+    const result = runInRegistry(stateDir, `
+      const codex = {
+        session_id: '01a00e82-823a-7a51-a8ae-37a764b8ed0f',
+        transcript_path: process.env.HOME + '/.codex/sessions/2026/08/17/rollout-01a00e82.jsonl',
+        cwd: process.env.HOME + '/WakaWaka',
+        hook_event_name: 'SessionStart',
+        model: 'gpt-5.6-sol',
+        source: 'startup',
+      };
+      const claude = {
+        session_id: '3fa081a4-67f8-4c01-b3dc-32c59cf30047',
+        transcript_path: process.env.HOME + '/.claude/projects/-Users-jiejie-AG-knowledge/3fa081a4.jsonl',
+        cwd: process.env.HOME + '/AG_knowledge',
+        hook_event_name: 'SessionStart',
+      };
+      return {
+        codex: [registry.detectKind(codex, {}), registry.detectSessionId(codex)],
+        claude: [registry.detectKind(claude, {}), registry.detectSessionId(claude)],
+        // No transcript to go on: the old weak guess, which is right far more
+        // often than not because Claude Code is the common case.
+        neither: registry.detectKind({ session_id: 'x' }, {}),
+      };
+    `);
+
+    assert.deepEqual(result.codex, ['codex', '01a00e82-823a-7a51-a8ae-37a764b8ed0f']);
+    assert.deepEqual(result.claude, ['claude-code', '3fa081a4-67f8-4c01-b3dc-32c59cf30047']);
+    assert.equal(result.neither, 'claude-code');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the agent marker outranks the payload, and a bogus one is ignored', () => {
+  const { root, stateDir } = tempStateDir();
+  try {
+    const result = runInRegistry(stateDir, `
+      return {
+        // Codex hooks run the same scripts; the marker is what tells them apart
+        // when the payload only carries the weak session_id hint.
+        wins: registry.detectKind({ session_id: 'x' }, { WAKAWAKA_AGENT: 'codex' }),
+        // But an inherited marker must not refile a payload that named itself:
+        // env vars leak into child processes, explicit fields do not.
+        explicitPayloadWins: registry.detectKind({ agent: 'claude-code', session_id: 'x' },
+                                                 { WAKAWAKA_AGENT: 'codex' }),
+        codexIdWins: registry.detectKind({ codex_session_id: 'c' },
+                                         { WAKAWAKA_AGENT: 'claude-code' }),
+        // Anything not a known agent falls back to the payload rather than
+        // becoming a kind of its own — this ends up in a filename.
+        bogus: registry.detectKind({ session_id: 'x' }, { WAKAWAKA_AGENT: '../evil' }),
+        unset: registry.detectKind({ session_id: 'x' }, {}),
+      };
+    `);
+    assert.equal(result.wins, 'codex');
+    assert.equal(result.explicitPayloadWins, 'claude-code');
+    assert.equal(result.codexIdWins, 'codex');
+    assert.equal(result.bogus, 'claude-code');
+    assert.equal(result.unset, 'claude-code');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a Codex session registers under its own kind, from its own payload', () => {
+  const { root, stateDir } = tempStateDir();
+  try {
+    const written = runInRegistry(stateDir, `
+      registry.upsertEntry({
+        session_id: 'codex-real',
+        transcript_path: process.env.HOME + '/.codex/sessions/2026/08/17/rollout.jsonl',
+        cwd: '/tmp/demo',
+      }, () => ({ state: 'working' }));
+      return registry.readEntry('codex', 'codex-real');
+    `);
+
+    assert.equal(written.kind, 'codex');
+    assert.equal(written.sessionId, 'codex-real');
+    assert.equal(written.state, 'working');
+    assert.ok(written.pid > 0);
+    assert.deepEqual(fs.readdirSync(stateDir), ['agent_codex_codex-real.json']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a corrupt registry file reads as absent rather than throwing', () => {
   const { root, stateDir } = tempStateDir();
   try {

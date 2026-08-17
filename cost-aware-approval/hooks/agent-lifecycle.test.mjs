@@ -364,6 +364,39 @@ test('an unwritable state directory cannot break an approval', () => {
 
 // ── Codex keying ─────────────────────────────────────────────────────────────
 
+/**
+ * End to end on the payload Codex really sends — captured from codex-cli
+ * 0.147.0, which names no agent and uses the same `session_id` spelling Claude
+ * Code does. The same run used to land on a `claude-code` row.
+ */
+test('a Codex session appears in the panel under its own kind', () => {
+  const codex = {
+    session_id: 'codex-live-1',
+    transcript_path: `${os.homedir()}/.codex/sessions/2026/08/17/rollout-codex-live-1.jsonl`,
+    cwd: `${os.homedir()}/WakaWaka`,
+    hook_event_name: 'SessionStart',
+    model: 'gpt-5.6-sol',
+    source: 'startup',
+  };
+  const h = createHarness();
+  try {
+    runHook(h, HOOKS.sessionStart, codex);
+
+    const entry = h.entry('codex', 'codex-live-1');
+    assert.ok(entry, 'a Codex session that starts is a session the panel can show');
+    assert.equal(entry.kind, 'codex');
+    assert.equal(entry.cwd, '~/WakaWaka');
+    assert.equal(entry.model, 'gpt-5.6-sol');
+    assert.equal(h.entry('claude-code', 'codex-live-1'), null, 'and not as Claude Code');
+
+    runHook(h, HOOKS.userPrompt, { ...codex, prompt: 'ship it' });
+    assert.equal(h.entry('codex', 'codex-live-1').state, 'working');
+
+    runHook(h, HOOKS.sessionEnd, codex);
+    assert.equal(h.entry('codex', 'codex-live-1'), null, 'and it leaves when it ends');
+  } finally { h.cleanup(); }
+});
+
 test('Codex sessions key on codex_session_id, not the approval UUID', () => {
   const h = createHarness();
   try {

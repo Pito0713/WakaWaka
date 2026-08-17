@@ -276,14 +276,43 @@ export async function readHookInput(stream = process.stdin) {
 
 /**
  * `kind` for a payload. Claude Code and Codex share the lifecycle hooks, so the
- * agent is identified by which fields the payload carries rather than by having
- * separate scripts.
+ * agent has to be identified rather than assumed from which script ran.
+ *
+ * A real Codex payload names no agent — it looks like a Claude Code one, down
+ * to `session_id` — so the last rule below used to file every Codex session as
+ * Claude Code. What does separate them is where the agent keeps its transcript:
+ * Codex writes under `~/.codex/`, Claude Code under `~/.claude/`. That is a
+ * property of the running agent rather than a field it chose to send, and it
+ * needs no change to `.codex/hooks.json` — which matters, because Codex records
+ * a trust hash per hook registration and silently skips a registration whose
+ * command has changed since. (Measured, not assumed: a marker env var added to
+ * that file stopped the hooks from running at all.)
  */
-export function detectKind(payload) {
+export function detectKind(payload, env = process.env) {
+  // An explicit statement outranks everything: `agent` is set by our own
+  // callers, and `codex_session_id` only exists on a pending file we wrote.
+  if (payload && typeof payload === 'object') {
+    if (typeof payload.codex_session_id === 'string') return 'codex';
+    if (typeof payload.agent === 'string' && VALID_KINDS.has(payload.agent)) return payload.agent;
+  }
+  // Then a marker, for a caller that knows what it launched. Below the explicit
+  // fields because environment variables are inherited: one left set in a shell
+  // must not refile a session that named its own agent.
+  if (VALID_KINDS.has(env.WAKAWAKA_AGENT)) return env.WAKAWAKA_AGENT;
   if (!payload || typeof payload !== 'object') return null;
-  if (typeof payload.codex_session_id === 'string') return 'codex';
-  if (typeof payload.agent === 'string' && VALID_KINDS.has(payload.agent)) return payload.agent;
-  if (typeof payload.session_id === 'string') return 'claude-code';
+
+  const fromTranscript = kindFromTranscriptPath(payload.transcript_path);
+  if (fromTranscript) return fromTranscript;
+
+  // Last and weakest: a session id alone says only that some agent is running.
+  return typeof payload.session_id === 'string' ? 'claude-code' : null;
+}
+
+/** `~/.codex/sessions/…` or `~/.claude/projects/…` — whose transcript is this. */
+function kindFromTranscriptPath(transcriptPath) {
+  if (typeof transcriptPath !== 'string') return null;
+  if (transcriptPath.includes('/.codex/')) return 'codex';
+  if (transcriptPath.includes('/.claude/')) return 'claude-code';
   return null;
 }
 
@@ -305,11 +334,20 @@ export function recordToolUse(payload) {
   const sessionId = detectSessionId(payload);
   if (!kind || !isValidSessionId(sessionId)) return false;
 
-  const toolName = typeof payload?.tool_name === 'string' ? payload.tool_name : null;
+  // Both spellings, for the same reason `detectSessionId` takes both.
+  const rawToolName = payload?.tool_name ?? payload?.toolName ?? payload?.name;
+  const toolName = typeof rawToolName === 'string' ? rawToolName : null;
   // `Skill` names the skill in its input; every other tool contributes only
   // its own name. Nothing else from tool_input is read.
-  const skillName = toolName === 'Skill' ? skillIdentifier(payload?.tool_input?.skill) : null;
+  const toolInput = payload?.tool_input ?? payload?.toolInput;
+  const skillName = toolName === 'Skill' ? skillIdentifier(toolInput?.skill) : null;
 
+  // Update only — deliberately not `upsertEntry`. Registering an unknown
+  // session means resolving a pid, which is up to five `ps` calls, and this
+  // runs ahead of the approval decision on every single tool call. The comment
+  // at the call site budgets this line at a fraction of a millisecond, and that
+  // has to stay true. `UserPromptSubmit` does the registering instead: it opens
+  // every turn and blocks nothing.
   return updateEntry(kind, sessionId, () => (
     skillName
       ? { state: 'working', lastTool: toolName, skill: skillName, skillSource: 'tool' }
@@ -329,9 +367,16 @@ export function skillIdentifier(value) {
   return /^[A-Za-z0-9][A-Za-z0-9:_-]{0,63}$/.test(value) ? value : null;
 }
 
-/** The session id to key the registry on — Codex's own id, not the approval UUID. */
+/**
+ * The session id to key the registry on — Codex's own id, not the approval UUID.
+ *
+ * `sessionId` is taken as well, mirroring the tolerance the Codex-specific
+ * hooks have always had (`permissionrequest-codex.mjs`). Codex's lifecycle
+ * payload uses the snake_case spelling today; this costs nothing and means a
+ * change of spelling would not silently empty the panel.
+ */
 export function detectSessionId(payload) {
   if (!payload || typeof payload !== 'object') return null;
-  const id = payload.codex_session_id ?? payload.session_id;
+  const id = payload.codex_session_id ?? payload.session_id ?? payload.sessionId;
   return typeof id === 'string' ? id : null;
 }
