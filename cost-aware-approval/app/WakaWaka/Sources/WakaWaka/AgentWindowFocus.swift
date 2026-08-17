@@ -53,10 +53,20 @@ enum AgentWindowFocus {
     static func focus(pid: Int32) -> Outcome {
         guard let agentTTY = controllingTTY(of: pid) else { return .noTTY }
 
-        // Inside tmux the pane must be selected before its window is raised,
-        // otherwise the right window comes forward showing the wrong pane.
         guard let pane = tmuxPane(forTTY: agentTTY) else {
             return raiseTerminalTab(tty: agentTTY)
+        }
+
+        // The window may already be on screen — the user's own attachment, or a
+        // view left open by an earlier click. Raising it is both cheaper and
+        // less surprising than stacking a second window showing the same pane,
+        // which is what this did unconditionally.
+        if let tty = attachedClientTTY(showing: pane) {
+            let raised = raiseTerminalTab(tty: tty)
+            if raised == .focused { return raised }
+            // That client lives in a terminal we cannot drive (iTerm, VS Code).
+            // The view window below is Terminal.app whatever the user attached
+            // from, so it still gets them to the pane.
         }
         return openTmuxViewWindow(for: pane)
     }
@@ -119,6 +129,31 @@ enum AgentWindowFocus {
         return nil
     }
 
+    /// The tty of a client that is already displaying this pane's window.
+    ///
+    /// Matched on the window rather than on the session: grouped sessions share
+    /// windows, so a client sitting in the agent's own session and one sitting
+    /// in a view of it are showing the same thing, and either is worth raising.
+    private static func attachedClientTTY(showing pane: Pane) -> String? {
+        guard let tmux = tmuxPath else { return nil }
+        // `#{window_id}` on a client is the window that client is currently
+        // looking at, which is the question being asked here — a client
+        // attached to the right session but parked on another window is not
+        // showing the agent, and switching it would move the user's own view.
+        guard let listing = run(tmux, ["list-clients", "-F", "#{client_tty}\t#{window_id}"])
+        else { return nil }
+        return parseClientShowingWindow(listing, windowID: pane.windowID)
+    }
+
+    static func parseClientShowingWindow(_ listing: String, windowID: String) -> String? {
+        for line in listing.split(separator: "\n") {
+            let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard f.count == 2, f[1] == windowID, isValidTTY(f[0]) else { continue }
+            return f[0]
+        }
+        return nil
+    }
+
     /// A per-install token, so a view session can never collide with one the
     /// user made. Persisted rather than random per launch: clicking the same
     /// agent after a restart should still find the window already open.
@@ -140,7 +175,8 @@ enum AgentWindowFocus {
         "wakawaka-\(token)-view-\(paneID.dropFirst())"
     }
 
-    /// Opens the agent's tmux window in a window of its own.
+    /// Opens the agent's tmux window in a window of its own — the last resort,
+    /// for a pane no attached client is currently showing.
     ///
     /// `switch-client` was the obvious primitive and the wrong one: it moves the
     /// client the user is already sitting in. A *grouped* session was the second
@@ -267,15 +303,6 @@ enum AgentWindowFocus {
 
     static func isSafeForAppleScriptLiteral(_ command: String) -> Bool {
         !command.contains("\"") && !command.contains("\\") && !command.contains("\n")
-    }
-
-    /// The tty of the client already viewing our window for this pane, if any.
-    private static func existingViewClientTTY(_ viewName: String, tmux: String) -> String? {
-        // `has-session` matches by prefix, so `wakawaka-view-1` would answer for
-        // `wakawaka-view-19`. The name comparison happens here instead.
-        guard let listing = run(tmux, ["list-clients", "-F", "#{client_tty}\t#{session_name}"])
-        else { return nil }
-        return parseClientTTY(listing, forSession: viewName)
     }
 
     static func parseClientTTY(_ listing: String, forSession name: String) -> String? {

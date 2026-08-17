@@ -79,6 +79,42 @@ struct AgentWindowFocusTests {
         #expect(AgentWindowFocus.parsePane("", tty: "/dev/ttys002") == nil)
     }
 
+    // MARK: - Reusing a window that is already on screen
+
+    /// The bug this closes: every click built a grouped "view" session and a new
+    /// Terminal window, even when the user was already looking at that pane. One
+    /// click on an agent you are watching would leave two windows showing it.
+    @Test func aClientAlreadyShowingTheWindowIsPreferred() {
+        let clients = """
+        /dev/ttys005\t@1
+        /dev/ttys006\t@0
+        """
+        #expect(AgentWindowFocus.parseClientShowingWindow(clients, windowID: "@1")
+                == "/dev/ttys005")
+        #expect(AgentWindowFocus.parseClientShowingWindow(clients, windowID: "@9") == nil,
+                "nobody is watching that window; a view has to be opened")
+    }
+
+    /// Attached to the right session but parked on another window is not the
+    /// same as showing the agent. Switching that client's window would move
+    /// what the user is looking at, which is the whole reason this feature
+    /// opens its own window instead of using `switch-client`.
+    @Test func aClientParkedOnAnotherWindowIsNotAMatch() {
+        #expect(AgentWindowFocus.parseClientShowingWindow("/dev/ttys005\t@7",
+                                                          windowID: "@1") == nil)
+    }
+
+    @Test func aClientLineThatIsNotUsableIsSkipped() {
+        let clients = """
+        (none)\t@1
+        /dev/ttys005\t@1\t@1
+        /dev/ttys006\t@1
+        """
+        #expect(AgentWindowFocus.parseClientShowingWindow(clients, windowID: "@1")
+                == "/dev/ttys006", "an unusable tty and a malformed line are both skipped")
+        #expect(AgentWindowFocus.parseClientShowingWindow("", windowID: "@1") == nil)
+    }
+
     // MARK: - Finding a view window that is already open
 
     /// Clicking the same agent twice must raise the window that is already
