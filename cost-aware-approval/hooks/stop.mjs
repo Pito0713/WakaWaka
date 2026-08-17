@@ -20,6 +20,10 @@ async function main() {
   const sessionId = detectSessionId(payload);
   if (!kind || !isValidSessionId(sessionId)) return;
 
+  // Update only: the end of a turn is also when `SessionEnd` fires, and a Stop
+  // hook that lands after it would re-create the entry its own session just
+  // deleted — a finished session back on the panel until the liveness sweep
+  // notices. Registering belongs to the events that open a turn, not close one.
   updateEntry(kind, sessionId, () => ({
     state: 'idle',
     skill: null,

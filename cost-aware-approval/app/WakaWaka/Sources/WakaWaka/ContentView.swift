@@ -7,16 +7,6 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Pinned above the queue: which agents are alive right now is
-            // context for the approvals below, not a separate screen.
-            ActiveAgentsView(
-                snapshot: model.activeAgents,
-                onFocus: { model.onFocusAgent($0) },
-                onRefresh: { model.onRefreshAgents() },
-                isRefreshing: model.isRefreshingAgents,
-                focusError: model.agentFocusError
-            )
-
             if model.pendingItems.isEmpty {
                 idleView
             } else {
@@ -65,6 +55,17 @@ struct ContentView: View {
 
             // ── Always-visible footer (auto toggles + usage bars) ──────────
             PopoverFooter(model: model)
+
+            // Last section in the popover: which agents are alive right now is
+            // reference material, so it sits under the controls rather than
+            // pushing the queue down the window.
+            ActiveAgentsView(
+                snapshot: model.activeAgents,
+                onFocus: { model.onFocusAgent($0) },
+                onRefresh: { model.onRefreshAgents() },
+                isRefreshing: model.isRefreshingAgents,
+                focusError: model.agentFocusError
+            )
         }
         .frame(width: 480)
         // Opaque, appearance-adaptive background so the popover never flashes a bare

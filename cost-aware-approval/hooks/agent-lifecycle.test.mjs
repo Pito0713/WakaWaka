@@ -231,14 +231,117 @@ test('the heartbeat does not change what PreToolUse decides', () => {
     const decision = JSON.parse(withEntry.stdout).hookSpecificOutput.permissionDecision;
     assert.equal(decision, 'allow');
 
-    // Same decision for a session the registry has never seen.
+    // Same decision for a session the registry has never seen — registering it
+    // is a side effect of the heartbeat, never an input to the decision.
     const withoutEntry = runHook(h, HOOKS.preToolUse, {
       session_id: 'unregistered', tool_name: 'Read', tool_input: { file_path: '/tmp/x' },
     });
     assert.equal(
       JSON.parse(withoutEntry.stdout).hookSpecificOutput.permissionDecision, 'allow');
-    assert.equal(h.entry('claude-code', 'unregistered'), null,
-      'a missing session is not resurrected by a tool call');
+  } finally { h.cleanup(); }
+});
+
+// ── Self-healing: a session the panel never saw start ────────────────────────
+
+/**
+ * The failure this prevents: install the hooks while windows are already open,
+ * and those sessions stay invisible for as long as they live. Only SessionStart
+ * wrote entries, every later hook declined to, and no amount of refreshing can
+ * conjure a file that nobody writes.
+ */
+test('a session that predates the hooks appears on its next prompt', () => {
+  const h = createHarness();
+  try {
+    // No SessionStart — this window was already running when the hooks landed.
+    runHook(h, HOOKS.userPrompt, { ...CLAUDE_SESSION, prompt: 'carry on' });
+
+    const entry = h.entry('claude-code', 'sess-abc');
+    assert.ok(entry, 'the session registers itself rather than staying hidden');
+    assert.equal(entry.state, 'working');
+    assert.equal(entry.cwd, '/tmp/demo-project');
+    assert.equal(entry.model, 'claude-opus-5');
+  } finally { h.cleanup(); }
+});
+
+/**
+ * A healed entry has to be liveness-checkable. One with no pid or no start time
+ * would be worse than no row at all: the reader could never retire it, so it
+ * would sit in the panel until the state directory was cleared by hand.
+ */
+test('a healed entry carries the pid the liveness check needs', () => {
+  const h = createHarness();
+  try {
+    runHook(h, HOOKS.userPrompt, { ...CLAUDE_SESSION, prompt: 'go' });
+
+    const entry = h.entry('claude-code', 'sess-abc');
+    assert.ok(entry, 'the turn registers an unknown session');
+    assert.equal(entry.schema, 1);
+    assert.ok(Number.isInteger(entry.pid) && entry.pid > 0, 'a real pid');
+    assert.ok(Number.isInteger(entry.pidStartedAt), 'and its start time');
+  } finally { h.cleanup(); }
+});
+
+test('a healed session still goes away when it ends', () => {
+  const h = createHarness();
+  try {
+    runHook(h, HOOKS.userPrompt, { ...CLAUDE_SESSION, prompt: 'go' });
+    runHook(h, HOOKS.stop, CLAUDE_SESSION);
+    assert.equal(h.entry('claude-code', 'sess-abc').state, 'idle');
+
+    runHook(h, HOOKS.sessionEnd, CLAUDE_SESSION);
+    assert.equal(h.entry('claude-code', 'sess-abc'), null);
+  } finally { h.cleanup(); }
+});
+
+/**
+ * Registering costs a pid resolution — several `ps` calls — and PreToolUse runs
+ * ahead of the approval decision on every tool call. The turn-opening hooks do
+ * that work instead, where nothing is waiting on it.
+ */
+test('the approval path never pays to register a session', () => {
+  const h = createHarness();
+  try {
+    runHook(h, HOOKS.preToolUse, {
+      ...CLAUDE_SESSION, tool_name: 'Read', tool_input: { file_path: '/tmp/x' },
+    });
+    assert.deepEqual(fs.readdirSync(h.stateDir), [],
+      'an unknown session is left to UserPromptSubmit, not resolved here');
+
+    // Once it exists, the heartbeat is an ordinary update again.
+    runHook(h, HOOKS.userPrompt, { ...CLAUDE_SESSION, prompt: 'go' });
+    runHook(h, HOOKS.preToolUse, {
+      ...CLAUDE_SESSION, tool_name: 'Read', tool_input: { file_path: '/tmp/x' },
+    });
+    assert.equal(h.entry('claude-code', 'sess-abc').lastTool, 'Read');
+  } finally { h.cleanup(); }
+});
+
+/**
+ * A Stop that lands after SessionEnd must not put the finished session back.
+ */
+test('Stop cannot resurrect a session that has already ended', () => {
+  const h = createHarness();
+  try {
+    runHook(h, HOOKS.sessionStart, CLAUDE_SESSION);
+    runHook(h, HOOKS.sessionEnd, CLAUDE_SESSION);
+    runHook(h, HOOKS.stop, CLAUDE_SESSION);
+
+    assert.deepEqual(fs.readdirSync(h.stateDir), []);
+  } finally { h.cleanup(); }
+});
+
+test("WakaWaka's own invocations are not healed into the panel either", () => {
+  const h = createHarness();
+  try {
+    // `claude -p "/usage"` runs every 10 minutes; healing must not hand it the
+    // entry SessionStart deliberately withholds.
+    runHook(h, HOOKS.userPrompt, { ...CLAUDE_SESSION, prompt: '/usage' },
+            { WAKAWAKA_INTERNAL: '1' });
+    runHook(h, HOOKS.preToolUse, {
+      ...CLAUDE_SESSION, tool_name: 'Read', tool_input: { file_path: '/tmp/x' },
+    }, { WAKAWAKA_INTERNAL: '1' });
+
+    assert.deepEqual(fs.readdirSync(h.stateDir), [], 'no phantom session in the panel');
   } finally { h.cleanup(); }
 });
 

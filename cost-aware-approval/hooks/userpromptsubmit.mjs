@@ -9,7 +9,7 @@
 
 import {
   detectKind, detectSessionId, isInternalInvocation,
-  isValidSessionId, readHookInput, updateEntry,
+  isValidSessionId, readHookInput, upsertEntry,
 } from './agent-registry.mjs';
 
 /**
@@ -34,7 +34,7 @@ async function main() {
   if (!kind || !isValidSessionId(sessionId)) return;
 
   const skill = slashCommandName(payload.prompt);
-  updateEntry(kind, sessionId, () => (
+  upsertEntry(payload, () => (
     skill
       ? { state: 'working', skill, skillSource: 'slash' }
       : { state: 'working' }

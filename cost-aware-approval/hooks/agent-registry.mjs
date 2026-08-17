@@ -124,6 +124,38 @@ export function updateEntry(kind, sessionId, mutate) {
   return writeEntry(next);
 }
 
+/**
+ * Update, registering the session first when it has no entry yet.
+ *
+ * `SessionStart` is the only event that opens a window's registry file, so a
+ * session that was already running when the hooks were installed — or whose
+ * entry was swept while its window stayed open — could never appear in the
+ * panel again. No amount of refreshing helps: the reader can only show files
+ * that exist, and every later hook declined to write one.
+ *
+ * The original objection to writing here was that the entry would have no pid
+ * and no start time, leaving a row the liveness check could never retire. That
+ * does not apply when it is built exactly the way `SessionStart` builds it —
+ * this hook is a child of the same agent process, so the parent walk finds the
+ * same pid. The cost (a handful of `ps` calls) is paid once, on the event that
+ * heals the session; afterwards this is an ordinary update.
+ */
+export function upsertEntry(payload, mutate) {
+  const kind = detectKind(payload);
+  const sessionId = detectSessionId(payload);
+  if (!kind || !isValidSessionId(sessionId)) return false;
+  if (updateEntry(kind, sessionId, mutate)) return true;
+
+  const created = buildEntry({
+    kind,
+    sessionId,
+    cwd: payload.cwd ?? process.cwd(),
+    gitBranch: payload.gitBranch ?? null,
+    model: payload.model ?? null,
+  });
+  return writeEntry({ ...created, ...mutate(created) });
+}
+
 // ── Process identity ──────────────────────────────────────────────────────────
 
 /**

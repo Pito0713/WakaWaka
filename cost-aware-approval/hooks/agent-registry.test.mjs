@@ -250,15 +250,78 @@ test('pid resolution terminates on a chain with no agent process', () => {
 
 // ── Update semantics ─────────────────────────────────────────────────────────
 
-test('updateEntry refuses to resurrect a session it never saw start', () => {
+test('updateEntry never writes a file for a session it never saw start', () => {
   const { root, stateDir } = tempStateDir();
   try {
-    // Sessions that predate hook installation have no entry. Creating one here
-    // would produce a row with no pid, which the liveness check can never clear.
+    // A blind update has no payload to build a proper entry from, so it would
+    // write a row with no pid — one the liveness check could never clear.
+    // Registering an unknown session is `upsertEntry`'s job, not this one's.
     const updated = runInRegistry(stateDir, `
       return registry.updateEntry('claude-code', 'never-started', () => ({ state: 'working' }));
     `);
     assert.equal(updated, false);
+    assert.deepEqual(fs.readdirSync(stateDir), []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('upsertEntry registers an unknown session with a checkable pid', () => {
+  const { root, stateDir } = tempStateDir();
+  try {
+    const entry = runInRegistry(stateDir, `
+      registry.upsertEntry(
+        { session_id: 'healed', cwd: '/tmp/demo', model: 'claude-opus-5' },
+        () => ({ state: 'working', lastTool: 'Bash' }),
+      );
+      return registry.readEntry('claude-code', 'healed');
+    `);
+
+    assert.equal(entry.sessionId, 'healed');
+    assert.equal(entry.state, 'working');
+    assert.equal(entry.lastTool, 'Bash');
+    assert.ok(entry.pid > 0, 'resolved from this process, as SessionStart does');
+    assert.ok(Number.isInteger(entry.pidStartedAt), 'so a dead row can be swept');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('upsertEntry leaves an existing entry where SessionStart put it', () => {
+  const { root, stateDir } = tempStateDir();
+  try {
+    const result = runInRegistry(stateDir, `
+      registry.writeEntry(registry.buildEntry({
+        kind: 'claude-code', sessionId: 'known', cwd: '/tmp/original', pid: process.pid,
+      }));
+      const before = registry.readEntry('claude-code', 'known');
+      await new Promise((r) => setTimeout(r, 15));
+      registry.upsertEntry(
+        { session_id: 'known', cwd: '/tmp/somewhere-else' },
+        () => ({ lastTool: 'Edit' }),
+      );
+      return { before, after: registry.readEntry('claude-code', 'known') };
+    `);
+
+    assert.equal(result.after.cwd, '/tmp/original', 'the update path, not a rewrite');
+    assert.equal(result.after.startedAt, result.before.startedAt);
+    assert.equal(result.after.lastTool, 'Edit');
+    assert.ok(result.after.heartbeatAt > result.before.heartbeatAt);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('upsertEntry rejects a payload it cannot key on', () => {
+  const { root, stateDir } = tempStateDir();
+  try {
+    const written = runInRegistry(stateDir, `
+      return [
+        registry.upsertEntry({ session_id: '../escape' }, () => ({})),
+        registry.upsertEntry({ cwd: '/tmp/x' }, () => ({})),
+      ];
+    `);
+    assert.deepEqual(written, [false, false]);
     assert.deepEqual(fs.readdirSync(stateDir), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The ACTIVE AGENTS panel, pinned above the approval queue.
+/// The ACTIVE AGENTS panel, pinned to the bottom of the popover.
 ///
 /// Every value here comes from a hook event or a pid check, so nothing is
 /// inferred — there is no "probably still running" state to draw, which is the
@@ -23,6 +23,9 @@ struct ActiveAgentsView: View {
 
     var body: some View {
         if !snapshot.isEmpty {
+            // The rule belongs to this section: it sits last, so it draws its
+            // own top edge instead of relying on whatever precedes it.
+            Divider()
             VStack(alignment: .leading, spacing: 0) {
                 header
                 ForEach(snapshot.rows.prefix(AgentRegistryService.maxRows)) { row in
@@ -39,7 +42,6 @@ struct ActiveAgentsView: View {
                 }
             }
             .padding(.vertical, 8)
-            Divider()
         }
     }
 
