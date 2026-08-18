@@ -77,7 +77,9 @@ final class FloatingAgentsPanelController: NSWindowController {
             onFocus: onFocus,
             onToggleMode: { [weak self] in self?.toggleMode() },
             onLayoutChange: { [weak self] mode in self?.resize(to: mode) },
-            onSetPinned: { [weak self] isPinned in self?.setPinned(isPinned) },
+            onSetPinned: { [weak self] isPinned, mode in
+                self?.setPinned(isPinned, displayedMode: mode)
+            },
             onSetOpacity: { [weak self] opacity in self?.setOpacity(opacity) }
         ))
 
@@ -126,7 +128,12 @@ final class FloatingAgentsPanelController: NSWindowController {
         resize(to: currentEffectiveMode)
     }
 
-    func setPinned(_ isPinned: Bool) {
+    func setPinned(_ isPinned: Bool, displayedMode: FloatingPanelMode? = nil) {
+        if isPinned {
+            let mode = displayedMode ?? currentEffectiveMode
+            model.preferredMode = mode
+            preferences.mode = mode
+        }
         model.isPinned = isPinned
         preferences.isPinned = isPinned
     }
@@ -158,23 +165,10 @@ final class FloatingAgentsPanelController: NSWindowController {
     /// Preserve maxY so hover expansion grows downward and contraction rises upward.
     private func resize(to mode: FloatingPanelMode) {
         currentMode = mode
-        let size = measuredContentSize(mode: mode)
+        let size = FloatingPanelSizing.contentSize(model: model, mode: mode)
         let origin = NSPoint(x: panel.frame.minX, y: panel.frame.maxY - size.height)
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
         clampToVisibleScreens()
-    }
-
-    /// Measuring the live model keeps transient focus errors from being clipped.
-    private func measuredContentSize(mode: FloatingPanelMode) -> NSSize {
-        let width = FloatingPanelLayout.width(for: mode)
-        let rootView = FloatingAgentsView(
-            model: model,
-            onFocus: { _ in },
-            onToggleMode: {},
-            onLayoutChange: { _ in }
-        )
-        let height = NSHostingView(rootView: rootView.frame(width: width)).fittingSize.height
-        return NSSize(width: width, height: height)
     }
 
     /// Revalidating against current visible frames keeps autosaved positions usable

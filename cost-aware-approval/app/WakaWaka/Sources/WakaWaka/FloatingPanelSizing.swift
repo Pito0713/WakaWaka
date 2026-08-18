@@ -10,13 +10,15 @@ enum FloatingPanelSizing {
         mode: FloatingPanelMode
     ) -> NSSize {
         let width = FloatingPanelLayout.width(for: mode)
-        // Pin the measurement copy to the requested mode so hover state in the
-        // live view cannot pair one mode's width with another mode's height.
+        // Pinning locks measurement to the requested mode, so fresh hover state
+        // cannot pair one mode's width with another mode's height. The copy must
+        // also carry focusError because that conditional row changes the height.
         let measurementModel = FloatingPanelModel(
             snapshot: model.snapshot,
             preferredMode: mode,
             isPinned: true,
-            baseOpacity: model.baseOpacity
+            baseOpacity: model.baseOpacity,
+            focusError: model.focusError
         )
         let rootView = FloatingAgentsView(
             model: measurementModel,

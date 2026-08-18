@@ -44,6 +44,29 @@ struct FloatingPanelSizingTests {
         #expect(size.height > 0)
     }
 
+    @Test func expandedMeasurementIgnoresCompactPreferredMode() {
+        let activeSnapshot = snapshot(agentCount: 3)
+        let compactModel = measurementModel(snapshot: activeSnapshot, preferredMode: .compact)
+        let expandedModel = measurementModel(snapshot: activeSnapshot, preferredMode: .expanded)
+
+        let compactPreferredSize = FloatingPanelSizing.contentSize(model: compactModel, mode: .expanded)
+        let expandedPreferredSize = FloatingPanelSizing.contentSize(model: expandedModel, mode: .expanded)
+
+        #expect(compactPreferredSize.height == expandedPreferredSize.height)
+    }
+
+    @Test func focusErrorIncreasesMeasuredHeight() {
+        let activeSnapshot = snapshot(agentCount: 2)
+        let modelWithoutError = measurementModel(snapshot: activeSnapshot, preferredMode: .compact)
+        let modelWithError = measurementModel(snapshot: activeSnapshot, preferredMode: .compact)
+        modelWithError.focusError = "找不到對應的終端機視窗"
+
+        let heightWithoutError = FloatingPanelSizing.contentSize(model: modelWithoutError, mode: .compact).height
+        let heightWithError = FloatingPanelSizing.contentSize(model: modelWithError, mode: .compact).height
+
+        #expect(heightWithError > heightWithoutError)
+    }
+
     private func contentSize(snapshot: ActiveAgentsSnapshot, mode: FloatingPanelMode) -> NSSize {
         let model = FloatingPanelModel(
             snapshot: snapshot,
@@ -52,6 +75,18 @@ struct FloatingPanelSizingTests {
             baseOpacity: 1
         )
         return FloatingPanelSizing.contentSize(model: model, mode: mode)
+    }
+
+    private func measurementModel(
+        snapshot: ActiveAgentsSnapshot,
+        preferredMode: FloatingPanelMode
+    ) -> FloatingPanelModel {
+        FloatingPanelModel(
+            snapshot: snapshot,
+            preferredMode: preferredMode,
+            isPinned: true,
+            baseOpacity: 1
+        )
     }
 
     private func snapshot(agentCount: Int) -> ActiveAgentsSnapshot {

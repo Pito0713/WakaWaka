@@ -22,6 +22,15 @@ struct FloatingPanelSettingsTests {
         }
     }
 
+    @Test func pinningExpandedDisplayPreservesExpandedMode() {
+        withController { controller, preferences in
+            controller.setPinned(true, displayedMode: .expanded)
+
+            #expect(preferences.mode == .expanded)
+            #expect(controller.model.preferredMode == .expanded)
+        }
+    }
+
     private func withController(
         perform assertions: (FloatingAgentsPanelController, FloatingPanelPreferences) -> Void
     ) {

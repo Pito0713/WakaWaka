@@ -985,6 +985,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         floatingPanelController?.update(snapshot: viewModel.activeAgents)
+        floatingPanelController?.update(focusError: viewModel.agentFocusError)
         floatingPanelController?.show()
     }
 

@@ -8,7 +8,7 @@ struct FloatingAgentsView: View {
     let onFocus: (ActiveAgentRow) -> Void
     let onToggleMode: () -> Void
     let onLayoutChange: (FloatingPanelMode) -> Void
-    let onSetPinned: (Bool) -> Void
+    let onSetPinned: (Bool, FloatingPanelMode) -> Void
     let onSetOpacity: (Double) -> Void
 
     init(
@@ -16,7 +16,7 @@ struct FloatingAgentsView: View {
         onFocus: @escaping (ActiveAgentRow) -> Void,
         onToggleMode: @escaping () -> Void,
         onLayoutChange: @escaping (FloatingPanelMode) -> Void,
-        onSetPinned: @escaping (Bool) -> Void = { _ in },
+        onSetPinned: @escaping (Bool, FloatingPanelMode) -> Void = { _, _ in },
         onSetOpacity: @escaping (Double) -> Void = { _ in }
     ) {
         self.model = model
@@ -47,7 +47,7 @@ struct FloatingAgentsView: View {
         }
         .contextMenu {
             Button {
-                onSetPinned(!model.isPinned)
+                onSetPinned(!model.isPinned, effectiveMode)
             } label: {
                 Label(
                     model.isPinned ? "取消釘選形態" : "釘選目前形態",

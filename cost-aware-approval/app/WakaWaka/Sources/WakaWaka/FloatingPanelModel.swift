@@ -13,12 +13,13 @@ final class FloatingPanelModel: ObservableObject {
         snapshot: ActiveAgentsSnapshot,
         preferredMode: FloatingPanelMode,
         isPinned: Bool,
-        baseOpacity: Double
+        baseOpacity: Double,
+        focusError: String? = nil
     ) {
         self.snapshot = snapshot
         self.preferredMode = preferredMode
         self.isPinned = isPinned
         self.baseOpacity = baseOpacity
-        self.focusError = nil
+        self.focusError = focusError
     }
 }
