@@ -916,6 +916,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setAgentFocusError(_ message: String?) {
         guard viewModel.agentFocusError != message else { return }
         viewModel.agentFocusError = message
+        floatingPanelController?.update(focusError: message)
         updatePopoverHeight()
     }
 

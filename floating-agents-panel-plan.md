@@ -235,11 +235,11 @@ degraded 一定要比「正常但空」更顯眼，否則讀不到 registry 會�
 - [x] `dot` / `compact` / `expanded` 三形態切換與 hover 行為
 - [x] 釘選開關（右鍵選單，pin 後 hover 不改形態）
 - [x] 點一列 → 呼叫既有 `focusAgentWindow(_:)`（焦點只跳一次需人工確認，見 §10）
-- [ ] `AgentWindowFocus.Outcome` 的失敗訊息在 HUD 內顯示 — **未做**
+- [x] `AgentWindowFocus.Outcome` 的失敗訊息在 HUD 內顯示，不靜默
 
-失敗訊息目前只顯示在 popover 的 `ActiveAgentsView`（透過 `viewModel.agentFocusError`），
-HUD 內點擊失敗時是靜默的。要修需要把 `agentFocusError` 也餵進 `FloatingPanelModel`。
-規模不大，但它會讓 HUD 多一條與 popover 重疊的狀態顯示路徑，值得先想清楚放哪裡再做。
+`AppDelegate.setAgentFocusError` 是唯一漏斗，從那裡分一條線進 `FloatingPanelModel.focusError`。
+`compact` / `expanded` 在列表下方顯示，`dot` 併進 tooltip。訊息出現會改變高度，所以寫入後
+重新量測——否則那行字會被裁掉，等於自我消滅。測試以「有訊息的高度嚴格大於沒訊息的高度」釘住這點。
 
 ### Phase 3 — 打磨
 
@@ -259,11 +259,11 @@ HUD 內點擊失敗時是靜默的。要修需要把 `agentFocusError` 也餵進
 
 | 項目 | 結果 |
 |------|------|
-| 測試總數 | 76（基準）→ **105**，全過 |
+| 測試總數 | 76（基準）→ **106**，全過 |
 | `swift build` | clean |
 | 既有測試 | 零紅燈 |
-| 新增檔案 | 7 個 source + 4 個測試檔 |
-| 既有檔案改動 | `AppDelegate.swift` +31 行、`PopoverFooter.swift` +21、`PopoverViewModel.swift` +4 |
+| 新增檔案 | 7 個 source + 5 個測試檔 |
+| 既有檔案改動 | `AppDelegate.swift` +32 行、`PopoverFooter.swift` +21、`PopoverViewModel.swift` +4 |
 
 **交叉驗證做了什麼**（executor 是 codex，reviewer 是 Claude，異模型家族）：
 

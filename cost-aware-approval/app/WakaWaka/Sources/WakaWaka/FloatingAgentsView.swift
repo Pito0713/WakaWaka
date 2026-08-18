@@ -105,7 +105,7 @@ struct FloatingAgentsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(model.snapshot.status.message ?? "展開懸浮 Agent 面板")
+        .help(dotHelp)
     }
 
     private func agentList(density: FloatingAgentRowDensity) -> some View {
@@ -122,7 +122,24 @@ struct FloatingAgentsView: View {
                     .padding(.top, 2)
                     .padding(.bottom, 5)
             }
+            if let focusError = model.focusError {
+                statusNote(focusError)
+            }
         }
+    }
+
+    private var dotHelp: String {
+        let messages = [model.snapshot.status.message, model.focusError].compactMap { $0 }
+        return messages.isEmpty ? "展開懸浮 Agent 面板" : messages.joined(separator: "\n")
+    }
+
+    private func statusNote(_ message: String) -> some View {
+        Label(message, systemImage: "exclamationmark.triangle")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.top, 4)
+            .padding(.bottom, 5)
     }
 
     private var header: some View {

@@ -7,6 +7,7 @@ final class FloatingPanelModel: ObservableObject {
     @Published var preferredMode: FloatingPanelMode
     @Published var isPinned: Bool
     @Published var baseOpacity: Double
+    @Published var focusError: String?
 
     init(
         snapshot: ActiveAgentsSnapshot,
@@ -18,5 +19,6 @@ final class FloatingPanelModel: ObservableObject {
         self.preferredMode = preferredMode
         self.isPinned = isPinned
         self.baseOpacity = baseOpacity
+        self.focusError = nil
     }
 }

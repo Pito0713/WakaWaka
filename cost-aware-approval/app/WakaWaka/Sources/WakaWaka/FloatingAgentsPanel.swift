@@ -121,6 +121,11 @@ final class FloatingAgentsPanelController: NSWindowController {
         resize(to: currentEffectiveMode)
     }
 
+    func update(focusError: String?) {
+        model.focusError = focusError
+        resize(to: currentEffectiveMode)
+    }
+
     func setPinned(_ isPinned: Bool) {
         model.isPinned = isPinned
         preferences.isPinned = isPinned
@@ -153,10 +158,23 @@ final class FloatingAgentsPanelController: NSWindowController {
     /// Preserve maxY so hover expansion grows downward and contraction rises upward.
     private func resize(to mode: FloatingPanelMode) {
         currentMode = mode
-        let size = FloatingPanelSizing.contentSize(model: model, mode: mode)
+        let size = measuredContentSize(mode: mode)
         let origin = NSPoint(x: panel.frame.minX, y: panel.frame.maxY - size.height)
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
         clampToVisibleScreens()
+    }
+
+    /// Measuring the live model keeps transient focus errors from being clipped.
+    private func measuredContentSize(mode: FloatingPanelMode) -> NSSize {
+        let width = FloatingPanelLayout.width(for: mode)
+        let rootView = FloatingAgentsView(
+            model: model,
+            onFocus: { _ in },
+            onToggleMode: {},
+            onLayoutChange: { _ in }
+        )
+        let height = NSHostingView(rootView: rootView.frame(width: width)).fittingSize.height
+        return NSSize(width: width, height: height)
     }
 
     /// Revalidating against current visible frames keeps autosaved positions usable
