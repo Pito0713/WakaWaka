@@ -33,6 +33,8 @@ final class PopoverViewModel: ObservableObject {
     @Published var isRefreshingAgents: Bool = false
     /// Why the last click could not reach a window; nil when it worked.
     @Published var agentFocusError: String? = nil
+    /// Mirrors the persisted flag so the footer never guesses controller state.
+    @Published var isFloatingPanelVisible: Bool = false
 
     /// Per-agent "auto mode" toggle state, mirrored from ~/.wakawaka/settings.json.
     /// AppDelegate owns the SettingsService round-trip (including the 30-min
@@ -53,6 +55,8 @@ final class PopoverViewModel: ObservableObject {
     var onToggleAutoMode: (AutoModeAgent, Bool) -> Void = { _, _ in }
     /// User tapped the "usage dashboard" button; AppDelegate opens the window.
     var onOpenDashboard: () -> Void = {}
+    /// AppDelegate owns the panel lifecycle and persistence behind this UI intent.
+    var onToggleFloatingPanel: (Bool) -> Void = { _ in }
     /// User clicked an agent row; bring its terminal to the front.
     var onFocusAgent: (ActiveAgentRow) -> Void = { _ in }
     /// User asked for an immediate liveness re-check of every agent.

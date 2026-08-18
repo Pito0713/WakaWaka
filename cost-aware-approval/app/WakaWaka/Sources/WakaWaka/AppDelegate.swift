@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var dashboardController: UsageDashboardWindowController?
+    private var floatingPanelController: FloatingAgentsPanelController?
+    private let floatingPanelPreferences = FloatingPanelPreferences()
     private var pollingTimer: Timer?
 
     private let viewModel = PopoverViewModel()
@@ -56,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SkinManager.shared.reload()   // pick up any user skin before first render
         setupStatusItem()
         setupPopover()
+        restoreFloatingPanel()
         startPolling()
         startSessionStatusPolling()
         startUsageCommandPolling()
@@ -115,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.fetchCodexUsage()
         }
         viewModel.onOpenDashboard = { [weak self] in self?.showUsageDashboard() }
+        viewModel.onToggleFloatingPanel = { [weak self] visible in self?.setFloatingPanelVisible(visible) }
         viewModel.onFocusAgent    = { [weak self] row in self?.focusAgentWindow(row) }
         viewModel.onRefreshAgents = { [weak self] in self?.refreshAgents() }
 
@@ -732,6 +736,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let agents = AgentRegistryService.snapshot(from: urls, pending: newQueue, scanError: scanError)
         if agents != viewModel.activeAgents {
             viewModel.activeAgents = agents
+            floatingPanelController?.update(snapshot: agents)
             // The approval queue may be unchanged, in which case this method
             // returns below without refreshing anything — so resize here or the
             // panel grows inside a popover that stays its old size.
@@ -948,6 +953,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard generation == self.agentScanGeneration else { return }
                 if snapshot != self.viewModel.activeAgents {
                     self.viewModel.activeAgents = snapshot
+                    self.floatingPanelController?.update(snapshot: snapshot)
                     self.updatePopoverHeight()
                 }
             }
@@ -955,6 +961,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - ViewModel sync
+
+    private func restoreFloatingPanel() {
+        viewModel.isFloatingPanelVisible = floatingPanelPreferences.isEnabled
+        if viewModel.isFloatingPanelVisible { showFloatingPanel() }
+    }
+
+    private func setFloatingPanelVisible(_ isVisible: Bool) {
+        floatingPanelPreferences.isEnabled = isVisible
+        viewModel.isFloatingPanelVisible = isVisible
+        if isVisible {
+            showFloatingPanel()
+        } else {
+            floatingPanelController?.hide()
+        }
+    }
+
+    private func showFloatingPanel() {
+        if floatingPanelController == nil {
+            floatingPanelController = FloatingAgentsPanelController { [weak self] row in
+                self?.focusAgentWindow(row)
+            }
+        }
+        floatingPanelController?.update(snapshot: viewModel.activeAgents)
+        floatingPanelController?.show()
+    }
 
     private let popoverWidth: CGFloat = 480
 
