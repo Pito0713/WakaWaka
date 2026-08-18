@@ -51,7 +51,7 @@ final class FloatingAgentsPanel: NSPanel {
 final class FloatingAgentsPanelController: NSWindowController {
     let panel: FloatingAgentsPanel
     private let preferences: FloatingPanelPreferences
-    private let model: FloatingPanelModel
+    let model: FloatingPanelModel
     private var currentMode: FloatingPanelMode = .dot
     private var screenParametersObserver: NSObjectProtocol?
 
@@ -76,7 +76,9 @@ final class FloatingAgentsPanelController: NSWindowController {
             model: model,
             onFocus: onFocus,
             onToggleMode: { [weak self] in self?.toggleMode() },
-            onLayoutChange: { [weak self] mode in self?.resize(to: mode) }
+            onLayoutChange: { [weak self] mode in self?.resize(to: mode) },
+            onSetPinned: { [weak self] isPinned in self?.setPinned(isPinned) },
+            onSetOpacity: { [weak self] opacity in self?.setOpacity(opacity) }
         ))
 
         // AppKit restores the last frame before placement is validated; clamping
@@ -117,6 +119,16 @@ final class FloatingAgentsPanelController: NSWindowController {
     func update(snapshot: ActiveAgentsSnapshot) {
         model.snapshot = snapshot
         resize(to: currentEffectiveMode)
+    }
+
+    func setPinned(_ isPinned: Bool) {
+        model.isPinned = isPinned
+        preferences.isPinned = isPinned
+    }
+
+    func setOpacity(_ opacity: Double) {
+        model.baseOpacity = opacity
+        preferences.opacity = opacity
     }
 
     private var currentEffectiveMode: FloatingPanelMode {

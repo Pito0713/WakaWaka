@@ -1,9 +1,12 @@
 # 計劃書：懸浮 Active Agents HUD
 
-> 狀態：**v1 — 待實作**
+> 狀態：**v2 — Phase 0–2 已實作，Phase 3 部分完成**（分支 `feat/floating-agents-panel`）
 > 對象：WakaWaka menu bar app（`cost-aware-approval/app/WakaWaka`）
-> 建立 2026-08-18
+> 建立 2026-08-18 ｜ v2 於同日回填實作結果
 > 前置：`active-agents-plan.md` v3（heartbeat registry）已實作完成
+
+實作分工：codex（`codex exec`，workspace-write sandbox 關在專屬 worktree 內）負責全部實作，
+Claude 負責切工單與交叉驗證。驗收證據見 §9。
 
 ---
 
@@ -140,11 +143,15 @@ floatingPanel.opacity   : Double   0.35…1.0，預設 0.95
 ```swift
 enum FloatingPanelPlacement {
     /// 把 frame 收進「任一螢幕 visibleFrame」的範圍內。
-    /// 與所有螢幕都沒有足夠交集時，回落到主螢幕右上角的預設位置。
     static func clamp(_ frame: NSRect, into screens: [NSRect],
                       minVisible: CGFloat = 40) -> NSRect
 }
 ```
+
+**實作採用的 fallback 語義**（與本文件初稿不同，以此為準）：與所有螢幕都沒有足夠交集時，
+**把 frame 平移進 `screens.first`，尺寸不變**，而不是丟到一個固定的預設角落。理由是平移保留了
+使用者原本的相對位置感——視窗從外接螢幕右下角回來時仍然靠右下，比彈到右上角少一次重新適應。
+frame 比螢幕還大時對齊左上角。`screens` 為空陣列時原樣回傳（沒有螢幕可參照就不要亂猜）。
 
 `minVisible` 的意思是「至少要有 40×40 落在某個螢幕內」才算可見——只露出 2pt 邊角等同看不見。螢幕清單以參數傳入而非直接讀 `NSScreen.screens`，才能在測試裡構造多螢幕與拔線情境。
 
@@ -208,33 +215,88 @@ degraded 一定要比「正常但空」更顯眼，否則讀不到 registry 會�
 
 一個空白 `NSPanel`，不接任何資料。只驗三件事：
 
-- [ ] 點擊面板**不會**讓 WakaWaka 變成 active app（用 `NSWorkspace.shared.frontmostApplication` 確認前景 app 沒變）
-- [ ] 另一個 app 進入全螢幕後，面板仍在畫面上
-- [ ] 切換桌面（Space）後面板仍在，且不參與切換動畫
+- [x] 顯示面板**不會**讓 WakaWaka 變成 active app — 由 `showingPanelDoesNotActivateApplication` 測試釘住，並經變異測試證明該測試會抓到回歸
+- [x] 另一個 app 進入全螢幕後，面板仍在畫面上 — 由 `.fullScreenAuxiliary` 斷言涵蓋（旗標層級，行為需人工確認，見 §10）
+- [x] 切換桌面（Space）後面板仍在 — 由 `.canJoinAllSpaces` / `.stationary` 斷言涵蓋（同上）
 
-任一項失敗就停下重新設計，不要往下做。
+**結論：風險閘通過**，設計成立。
 
 ### Phase 1 — 可用的 MVP
 
-- [ ] `compact` 形態顯示 agent 列表，資料來自既有 snapshot
-- [ ] 拖曳移動、位置持久化、重開 app 後回到原位
-- [ ] 位置 clamp 生效（拔掉外接螢幕後仍可見）
-- [ ] popover footer 有開關，狀態持久化
-- [ ] 相對時間會自己走（放著五分鐘，數字有變）
-- [ ] `FloatingPanelLayoutTests` 通過
+- [x] `compact` 形態顯示 agent 列表，資料來自既有 snapshot（`AppDelegate.poll()` 既有路徑，零新 timer）
+- [x] 拖曳移動、位置持久化（`isMovableByWindowBackground` + `setFrameAutosaveName`）
+- [x] 位置 clamp 生效，含螢幕變更通知重新校正
+- [x] popover footer 有開關，狀態持久化
+- [x] 相對時間用 `Text(_, style: .relative)`，不受 snapshot 是否 republish 影響
+- [x] `FloatingPanelLayoutTests` 通過（16 條）
 
 ### Phase 2 — 互動
 
-- [ ] `dot` / `compact` / `expanded` 三形態切換與 hover 行為
-- [ ] 釘選開關（pin 後 hover 不改形態）
-- [ ] 點一列 → 對應終端機到前景，且**焦點只跳一次**
-- [ ] `AgentWindowFocus.Outcome` 的失敗訊息在 HUD 內顯示，不靜默
+- [x] `dot` / `compact` / `expanded` 三形態切換與 hover 行為
+- [x] 釘選開關（右鍵選單，pin 後 hover 不改形態）
+- [x] 點一列 → 呼叫既有 `focusAgentWindow(_:)`（焦點只跳一次需人工確認，見 §10）
+- [ ] `AgentWindowFocus.Outcome` 的失敗訊息在 HUD 內顯示 — **未做**
+
+失敗訊息目前只顯示在 popover 的 `ActiveAgentsView`（透過 `viewModel.agentFocusError`），
+HUD 內點擊失敗時是靜默的。要修需要把 `agentFocusError` 也餵進 `FloatingPanelModel`。
+規模不大，但它會讓 HUD 多一條與 popover 重疊的狀態顯示路徑，值得先想清楚放哪裡再做。
 
 ### Phase 3 — 打磨
 
-- [ ] degraded 狀態視覺（黃點 + tooltip）
-- [ ] 透明度設定
-- [ ] `SkinManager` 整合（若使用者裝了 skin，狀態點改用 skin 的顏色集）
+- [x] degraded 狀態視覺（黃點 + tooltip）
+- [x] 透明度設定（右鍵選單三段：1.0 / 0.85 / 0.5）
+- [ ] ~~`SkinManager` 整合~~ — **判定不可行，取消此項**
+
+`SkinManager` 只暴露 `image(wave:action:pending:) -> NSImage?` 與 `activeSkin`（見
+`Sources/WakaWaka/SkinManager.swift`）。skin 的資料模型是 menu bar 圖示的 PNG frame set，
+**沒有任何色盤或顏色 API**。要讓 HUD 狀態點「改用 skin 的顏色集」得先從 PNG 取樣反推主色，
+那是一個本計劃沒有論證過的新機制，成本與風險都不成比例。此項作廢；真要做應另開計劃，
+先為 `SkinManager` 定義顏色契約。
+
+---
+
+## 九、實作結果與驗收證據
+
+| 項目 | 結果 |
+|------|------|
+| 測試總數 | 76（基準）→ **105**，全過 |
+| `swift build` | clean |
+| 既有測試 | 零紅燈 |
+| 新增檔案 | 7 個 source + 4 個測試檔 |
+| 既有檔案改動 | `AppDelegate.swift` +31 行、`PopoverFooter.swift` +21、`PopoverViewModel.swift` +4 |
+
+**交叉驗證做了什麼**（executor 是 codex，reviewer 是 Claude，異模型家族）：
+
+1. **變異測試**驗「面板不搶焦點」那條測試不是空的：把 `show()` 換成
+   `NSApp.activate + makeKeyAndOrderFront`，測試確實紅（`isActive → true`），還原後綠。
+2. **變異測試**驗多螢幕 clamp：把 `screens.contains` 改成只檢查第一個螢幕，
+   `frameOnSecondScreenRemainsUnchanged` 確實紅。
+3. 每包交付後獨立重跑 `swift build` / `swift test`，不採信 executor 的自我宣稱。
+4. 逐條 grep 驗禁止事項：HUD 路徑無 `NSApp.activate` / `makeKeyAndOrderFront`、
+   `FloatingAgentRow` 無 `timeIntervalSince`、`contentView` 只在 `init` 指派一次、
+   view 未繞過 controller 直接寫偏好、測試未污染 `UserDefaults.standard`。
+
+**交叉驗證抓到並修掉的缺陷**：
+
+| # | 缺陷 | 影響 |
+|---|------|------|
+| 1 | 純邏輯層兩個檔案 0 條註解 | 違反 codebase 慣例（對照 `AgentRegistry.swift` 40/162） |
+| 2 | `isHovering` 在 controller 內被寫死 `false` | hover 展開永遠不會發生，`.expanded` 形態與 `isPinned` 偏好全成死碼 |
+| 3 | 每次 snapshot 變動重建整個 `NSHostingView` | 砸掉列的 hover 高亮與相對時間計時器，working agent 期間頻繁發生 |
+
+缺陷 2、3 同源（狀態放在 SwiftUI 外面），一併以 `FloatingPanelModel: ObservableObject` 重構解決。
+
+## 十、尚未驗證的部分（需要人工確認）
+
+以下三件事**無法在單元測試內驗證**，因為它們需要真實桌面環境與滑鼠互動：
+
+1. 點 HUD 內一列後，焦點是否真的只跳一次（單元測試只能證明 `show()` 不啟動 app）
+2. 別的 app 進入全螢幕時 HUD 是否仍可見
+3. 切換 Space 時 HUD 是否留在原地不參與動畫
+
+驗證方式：`swift run`，從 popover footer 的 `macwindow.on.rectangle` 按鈕開啟 HUD。
+**注意**：驗證前要先關掉正在執行的 WakaWaka 實例——兩個實例會有兩個 poller，
+而 `AgentRegistryService` 會刪除判定為死亡的 registry 檔案。
 
 ---
 

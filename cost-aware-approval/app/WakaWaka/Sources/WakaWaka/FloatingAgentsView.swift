@@ -8,6 +8,24 @@ struct FloatingAgentsView: View {
     let onFocus: (ActiveAgentRow) -> Void
     let onToggleMode: () -> Void
     let onLayoutChange: (FloatingPanelMode) -> Void
+    let onSetPinned: (Bool) -> Void
+    let onSetOpacity: (Double) -> Void
+
+    init(
+        model: FloatingPanelModel,
+        onFocus: @escaping (ActiveAgentRow) -> Void,
+        onToggleMode: @escaping () -> Void,
+        onLayoutChange: @escaping (FloatingPanelMode) -> Void,
+        onSetPinned: @escaping (Bool) -> Void = { _ in },
+        onSetOpacity: @escaping (Double) -> Void = { _ in }
+    ) {
+        self.model = model
+        self.onFocus = onFocus
+        self.onToggleMode = onToggleMode
+        self.onLayoutChange = onLayoutChange
+        self.onSetPinned = onSetPinned
+        self.onSetOpacity = onSetOpacity
+    }
 
     var body: some View {
         Group {
@@ -27,6 +45,22 @@ struct FloatingAgentsView: View {
         .onChange(of: effectiveMode) { _, mode in
             onLayoutChange(mode)
         }
+        .contextMenu {
+            Button {
+                onSetPinned(!model.isPinned)
+            } label: {
+                Label(
+                    model.isPinned ? "取消釘選形態" : "釘選目前形態",
+                    systemImage: model.isPinned ? "checkmark" : "pin"
+                )
+            }
+
+            Menu("透明度") {
+                opacityButton(title: "不透明", value: 1.0)
+                opacityButton(title: "稍微透明", value: 0.85)
+                opacityButton(title: "最透明", value: 0.5)
+            }
+        }
     }
 
     private var effectiveMode: FloatingPanelMode {
@@ -45,6 +79,14 @@ struct FloatingAgentsView: View {
             isDegraded: model.snapshot.status.message != nil,
             base: model.baseOpacity
         )
+    }
+
+    private func opacityButton(title: String, value: Double) -> some View {
+        Button {
+            onSetOpacity(value)
+        } label: {
+            Label(title, systemImage: model.baseOpacity == value ? "checkmark" : "circle")
+        }
     }
 
     private var dotContent: some View {
