@@ -15,12 +15,12 @@ struct FloatingPanelModelTests {
         _ = observation
     }
 
-    @Test func preferredModeChangePublishes() {
+    @Test func focusErrorChangePublishes() {
         let model = makeModel()
         var didPublish = false
         let observation = model.objectWillChange.sink { didPublish = true }
 
-        model.preferredMode = .expanded
+        model.focusError = "找不到對應的終端機視窗"
 
         #expect(didPublish)
         _ = observation
@@ -28,25 +28,14 @@ struct FloatingPanelModelTests {
 
     @Test func initialValuesMatchPreferences() {
         let snapshot = ActiveAgentsSnapshot(rows: [], status: .permissionDenied)
-        let model = FloatingPanelModel(
-            snapshot: snapshot,
-            preferredMode: .compact,
-            isPinned: true,
-            baseOpacity: 0.72
-        )
+        let model = FloatingPanelModel(snapshot: snapshot, baseOpacity: 0.72)
 
         #expect(model.snapshot.status == snapshot.status)
-        #expect(model.preferredMode == .compact)
-        #expect(model.isPinned)
         #expect(model.baseOpacity == 0.72)
+        #expect(model.focusError == nil)
     }
 
     private func makeModel() -> FloatingPanelModel {
-        FloatingPanelModel(
-            snapshot: .empty,
-            preferredMode: .compact,
-            isPinned: false,
-            baseOpacity: 0.85
-        )
+        FloatingPanelModel(snapshot: .empty, baseOpacity: 0.85)
     }
 }

@@ -4,66 +4,12 @@ import Testing
 @testable import WakaWaka
 
 struct FloatingPanelLayoutTests {
-    @Test func degradedModeCollapsesToDotEvenWithAgents() {
-        let mode = FloatingPanelLayout.effectiveMode(
-            preferred: .expanded,
-            isPinned: true,
-            isHovering: true,
-            agentCount: 3,
-            isDegraded: true
-        )
-
-        #expect(mode == .dot)
-    }
-
-    @Test func emptyAgentListCollapsesToDot() {
-        let mode = FloatingPanelLayout.effectiveMode(
-            preferred: .compact,
-            isPinned: false,
-            isHovering: false,
-            agentCount: 0,
-            isDegraded: false
-        )
-
-        #expect(mode == .dot)
-    }
-
-    @Test func hoveringExpandsUnpinnedMode() {
-        let mode = FloatingPanelLayout.effectiveMode(
-            preferred: .compact,
-            isPinned: false,
-            isHovering: true,
-            agentCount: 1,
-            isDegraded: false
-        )
-
-        #expect(mode == .expanded)
-    }
-
-    @Test func hoveringPreservesPinnedPreferredMode() {
-        let mode = FloatingPanelLayout.effectiveMode(
-            preferred: .compact,
-            isPinned: true,
-            isHovering: true,
-            agentCount: 1,
-            isDegraded: false
-        )
-
-        #expect(mode == .compact)
-    }
-
     @Test func emptyNormalStateIsDimmed() {
         #expect(FloatingPanelLayout.opacity(agentCount: 0, isDegraded: false, base: 0.95) == 0.35)
     }
 
     @Test func degradedStatePreservesBaseOpacity() {
         #expect(FloatingPanelLayout.opacity(agentCount: 0, isDegraded: true, base: 0.95) == 0.95)
-    }
-
-    @Test func widthsMatchEachPanelMode() {
-        #expect(FloatingPanelLayout.width(for: .dot) == 30)
-        #expect(FloatingPanelLayout.width(for: .compact) == 220)
-        #expect(FloatingPanelLayout.width(for: .expanded) == 300)
     }
 
     @Test func offscreenFrameMovesInsideFirstScreenWithoutResizing() {
@@ -117,14 +63,6 @@ struct FloatingPanelLayoutTests {
 
         #expect(clamped.origin == NSPoint(x: screen.minX, y: screen.maxY - frame.height))
         #expect(clamped.size == frame.size)
-    }
-
-    @Test func unknownStoredModeFallsBackToCompact() {
-        withIsolatedDefaults { defaults, preferences in
-            defaults.set("unknown", forKey: "floatingPanel.mode")
-
-            #expect(preferences.mode == .compact)
-        }
     }
 
     @Test func storedOpacityAboveRangeIsClamped() {

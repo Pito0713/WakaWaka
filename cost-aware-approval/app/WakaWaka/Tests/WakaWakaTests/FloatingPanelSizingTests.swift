@@ -6,87 +6,74 @@ import Testing
 @MainActor
 struct FloatingPanelSizingTests {
     @Test func measuredContentHasNonzeroSize() {
-        let size = contentSize(snapshot: snapshot(agentCount: 1), mode: .compact)
+        let size = contentSize(snapshot: snapshot(agentCount: 1))
 
         #expect(size.width > 0)
         #expect(size.height > 0)
     }
 
     @Test func emptySnapshotKeepsNonzeroSize() {
-        let size = contentSize(snapshot: .empty, mode: .dot)
+        let size = contentSize(snapshot: .empty)
 
         #expect(size.width > 0)
         #expect(size.height > 0)
     }
 
-    @Test func compactHeightGrowsWithAgentCount() {
-        let oneAgent = contentSize(snapshot: snapshot(agentCount: 1), mode: .compact)
-        let threeAgents = contentSize(snapshot: snapshot(agentCount: 3), mode: .compact)
+    @Test func heightGrowsWithAgentCount() {
+        let oneAgent = contentSize(snapshot: snapshot(agentCount: 1))
+        let threeAgents = contentSize(snapshot: snapshot(agentCount: 3))
 
         #expect(threeAgents.height > oneAgent.height)
     }
 
-    @Test func widerModesUseMoreHorizontalSpace() {
-        let activeSnapshot = snapshot(agentCount: 1)
-        let dot = contentSize(snapshot: activeSnapshot, mode: .dot)
-        let compact = contentSize(snapshot: activeSnapshot, mode: .compact)
-        let expanded = contentSize(snapshot: activeSnapshot, mode: .expanded)
+    /// The HUD no longer resizes under the pointer, so agent count must be the
+    /// only thing that moves its width — a list that widened as rows arrived
+    /// would drift out from under wherever the user parked it.
+    @Test func widthIsConstantAcrossStates() {
+        let empty = contentSize(snapshot: .empty)
+        let populated = contentSize(snapshot: snapshot(agentCount: 3))
+        let degraded = contentSize(snapshot: ActiveAgentsSnapshot(rows: [], status: .permissionDenied))
 
-        #expect(expanded.width > compact.width)
-        #expect(compact.width > dot.width)
+        #expect(empty.width == FloatingPanelLayout.width)
+        #expect(populated.width == FloatingPanelLayout.width)
+        #expect(degraded.width == FloatingPanelLayout.width)
     }
 
     @Test func degradedEmptySnapshotKeepsNonzeroSize() {
         let degraded = ActiveAgentsSnapshot(rows: [], status: .permissionDenied)
-        let size = contentSize(snapshot: degraded, mode: .dot)
+        let size = contentSize(snapshot: degraded)
 
         #expect(size.width > 0)
         #expect(size.height > 0)
     }
 
-    @Test func expandedMeasurementIgnoresCompactPreferredMode() {
-        let activeSnapshot = snapshot(agentCount: 3)
-        let compactModel = measurementModel(snapshot: activeSnapshot, preferredMode: .compact)
-        let expandedModel = measurementModel(snapshot: activeSnapshot, preferredMode: .expanded)
+    /// The dot used to carry the registry failure in its tooltip. With the dot
+    /// gone the message has to occupy a row, and that row has to be measured.
+    @Test func degradedStatusIncreasesMeasuredHeight() {
+        let healthy = contentSize(snapshot: ActiveAgentsSnapshot(rows: [], status: .ok))
+        let degraded = contentSize(snapshot: ActiveAgentsSnapshot(rows: [], status: .permissionDenied))
 
-        let compactPreferredSize = FloatingPanelSizing.contentSize(model: compactModel, mode: .expanded)
-        let expandedPreferredSize = FloatingPanelSizing.contentSize(model: expandedModel, mode: .expanded)
-
-        #expect(compactPreferredSize.height == expandedPreferredSize.height)
+        #expect(degraded.height > healthy.height)
     }
 
     @Test func focusErrorIncreasesMeasuredHeight() {
         let activeSnapshot = snapshot(agentCount: 2)
-        let modelWithoutError = measurementModel(snapshot: activeSnapshot, preferredMode: .compact)
-        let modelWithError = measurementModel(snapshot: activeSnapshot, preferredMode: .compact)
+        let modelWithoutError = model(snapshot: activeSnapshot)
+        let modelWithError = model(snapshot: activeSnapshot)
         modelWithError.focusError = "找不到對應的終端機視窗"
 
-        let heightWithoutError = FloatingPanelSizing.contentSize(model: modelWithoutError, mode: .compact).height
-        let heightWithError = FloatingPanelSizing.contentSize(model: modelWithError, mode: .compact).height
+        let heightWithoutError = FloatingPanelSizing.contentSize(model: modelWithoutError).height
+        let heightWithError = FloatingPanelSizing.contentSize(model: modelWithError).height
 
         #expect(heightWithError > heightWithoutError)
     }
 
-    private func contentSize(snapshot: ActiveAgentsSnapshot, mode: FloatingPanelMode) -> NSSize {
-        let model = FloatingPanelModel(
-            snapshot: snapshot,
-            preferredMode: mode,
-            isPinned: true,
-            baseOpacity: 1
-        )
-        return FloatingPanelSizing.contentSize(model: model, mode: mode)
+    private func contentSize(snapshot: ActiveAgentsSnapshot) -> NSSize {
+        FloatingPanelSizing.contentSize(model: model(snapshot: snapshot))
     }
 
-    private func measurementModel(
-        snapshot: ActiveAgentsSnapshot,
-        preferredMode: FloatingPanelMode
-    ) -> FloatingPanelModel {
-        FloatingPanelModel(
-            snapshot: snapshot,
-            preferredMode: preferredMode,
-            isPinned: true,
-            baseOpacity: 1
-        )
+    private func model(snapshot: ActiveAgentsSnapshot) -> FloatingPanelModel {
+        FloatingPanelModel(snapshot: snapshot, baseOpacity: 1)
     }
 
     private func snapshot(agentCount: Int) -> ActiveAgentsSnapshot {

@@ -6,8 +6,6 @@ import Foundation
 struct FloatingPanelPreferences {
     private enum Key {
         static let isEnabled = "floatingPanel.enabled"
-        static let mode = "floatingPanel.mode"
-        static let isPinned = "floatingPanel.pinned"
         static let opacity = "floatingPanel.opacity"
     }
 
@@ -20,21 +18,6 @@ struct FloatingPanelPreferences {
     var isEnabled: Bool {
         get { defaults.object(forKey: Key.isEnabled) as? Bool ?? false }
         nonmutating set { defaults.set(newValue, forKey: Key.isEnabled) }
-    }
-
-    var mode: FloatingPanelMode {
-        get {
-            guard let rawValue = defaults.string(forKey: Key.mode) else {
-                return .compact
-            }
-            return FloatingPanelMode(rawValue: rawValue) ?? .compact
-        }
-        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.mode) }
-    }
-
-    var isPinned: Bool {
-        get { defaults.object(forKey: Key.isPinned) as? Bool ?? false }
-        nonmutating set { defaults.set(newValue, forKey: Key.isPinned) }
     }
 
     /// Persisted defaults can outlive code versions or be edited externally, so

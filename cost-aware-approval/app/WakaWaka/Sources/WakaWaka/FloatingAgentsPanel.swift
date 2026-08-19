@@ -52,19 +52,17 @@ final class FloatingAgentsPanelController: NSWindowController {
     let panel: FloatingAgentsPanel
     private let preferences: FloatingPanelPreferences
     let model: FloatingPanelModel
-    private var currentMode: FloatingPanelMode = .dot
     private var screenParametersObserver: NSObjectProtocol?
 
     init(
-        contentRect: NSRect = NSRect(x: 0, y: 0, width: 220, height: 120),
+        contentRect: NSRect = NSRect(x: 0, y: 0, width: FloatingPanelLayout.width, height: 120),
         preferences: FloatingPanelPreferences = FloatingPanelPreferences(),
-        onFocus: @escaping (ActiveAgentRow) -> Void = { _ in }
+        onFocus: @escaping (ActiveAgentRow) -> Void = { _ in },
+        onClose: @escaping () -> Void = {}
     ) {
         let panel = FloatingAgentsPanel(contentRect: contentRect)
         let model = FloatingPanelModel(
             snapshot: .empty,
-            preferredMode: preferences.mode,
-            isPinned: preferences.isPinned,
             baseOpacity: preferences.opacity
         )
         self.panel = panel
@@ -75,11 +73,7 @@ final class FloatingAgentsPanelController: NSWindowController {
         panel.contentView = NSHostingView(rootView: FloatingAgentsView(
             model: model,
             onFocus: onFocus,
-            onToggleMode: { [weak self] in self?.toggleMode() },
-            onLayoutChange: { [weak self] mode in self?.resize(to: mode) },
-            onSetPinned: { [weak self] isPinned, mode in
-                self?.setPinned(isPinned, displayedMode: mode)
-            },
+            onClose: onClose,
             onSetOpacity: { [weak self] opacity in self?.setOpacity(opacity) }
         ))
 
@@ -120,22 +114,12 @@ final class FloatingAgentsPanelController: NSWindowController {
     /// Publishing the snapshot preserves row hover state and relative-text timers.
     func update(snapshot: ActiveAgentsSnapshot) {
         model.snapshot = snapshot
-        resize(to: currentEffectiveMode)
+        resize()
     }
 
     func update(focusError: String?) {
         model.focusError = focusError
-        resize(to: currentEffectiveMode)
-    }
-
-    func setPinned(_ isPinned: Bool, displayedMode: FloatingPanelMode? = nil) {
-        if isPinned {
-            let mode = displayedMode ?? currentEffectiveMode
-            model.preferredMode = mode
-            preferences.mode = mode
-        }
-        model.isPinned = isPinned
-        preferences.isPinned = isPinned
+        resize()
     }
 
     func setOpacity(_ opacity: Double) {
@@ -143,29 +127,10 @@ final class FloatingAgentsPanelController: NSWindowController {
         preferences.opacity = opacity
     }
 
-    private var currentEffectiveMode: FloatingPanelMode {
-        FloatingPanelLayout.effectiveMode(
-            preferred: model.preferredMode,
-            isPinned: model.isPinned,
-            isHovering: currentMode == .expanded,
-            agentCount: model.snapshot.rows.count,
-            isDegraded: model.snapshot.status.message != nil
-        )
-    }
-
-    /// Empty and degraded dots are status indicators rather than navigation, so
-    /// clicking them must not overwrite the user's preferred populated mode.
-    private func toggleMode() {
-        guard !model.snapshot.rows.isEmpty, model.snapshot.status.message == nil else { return }
-        let preferredMode: FloatingPanelMode = model.preferredMode == .dot ? .compact : .dot
-        model.preferredMode = preferredMode
-        preferences.mode = preferredMode
-    }
-
-    /// Preserve maxY so hover expansion grows downward and contraction rises upward.
-    private func resize(to mode: FloatingPanelMode) {
-        currentMode = mode
-        let size = FloatingPanelSizing.contentSize(model: model, mode: mode)
+    /// Preserve maxY so a longer agent list grows downward and a shorter one
+    /// rises upward, leaving the HUD's top edge where the user parked it.
+    private func resize() {
+        let size = FloatingPanelSizing.contentSize(model: model)
         let origin = NSPoint(x: panel.frame.minX, y: panel.frame.maxY - size.height)
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
         clampToVisibleScreens()

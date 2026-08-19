@@ -4,21 +4,15 @@ import SwiftUI
 @MainActor
 final class FloatingPanelModel: ObservableObject {
     @Published var snapshot: ActiveAgentsSnapshot
-    @Published var preferredMode: FloatingPanelMode
-    @Published var isPinned: Bool
     @Published var baseOpacity: Double
     @Published var focusError: String?
 
     init(
         snapshot: ActiveAgentsSnapshot,
-        preferredMode: FloatingPanelMode,
-        isPinned: Bool,
         baseOpacity: Double,
         focusError: String? = nil
     ) {
         self.snapshot = snapshot
-        self.preferredMode = preferredMode
-        self.isPinned = isPinned
         self.baseOpacity = baseOpacity
         self.focusError = focusError
     }

@@ -2,75 +2,40 @@ import SwiftUI
 
 /// The HUD keeps empty and failed registry states visible because disappearance
 /// would make "nothing is running" indistinguishable from "the HUD is broken."
+/// It renders one form only — the full detail list — so nothing about the layout
+/// depends on where the pointer happens to be.
 struct FloatingAgentsView: View {
     @ObservedObject var model: FloatingPanelModel
-    @State private var isHovering = false
     let onFocus: (ActiveAgentRow) -> Void
-    let onToggleMode: () -> Void
-    let onLayoutChange: (FloatingPanelMode) -> Void
-    let onSetPinned: (Bool, FloatingPanelMode) -> Void
+    let onClose: () -> Void
     let onSetOpacity: (Double) -> Void
 
     init(
         model: FloatingPanelModel,
         onFocus: @escaping (ActiveAgentRow) -> Void,
-        onToggleMode: @escaping () -> Void,
-        onLayoutChange: @escaping (FloatingPanelMode) -> Void,
-        onSetPinned: @escaping (Bool, FloatingPanelMode) -> Void = { _, _ in },
+        onClose: @escaping () -> Void = {},
         onSetOpacity: @escaping (Double) -> Void = { _ in }
     ) {
         self.model = model
         self.onFocus = onFocus
-        self.onToggleMode = onToggleMode
-        self.onLayoutChange = onLayoutChange
-        self.onSetPinned = onSetPinned
+        self.onClose = onClose
         self.onSetOpacity = onSetOpacity
     }
 
     var body: some View {
-        Group {
-            switch effectiveMode {
-            case .dot:
-                dotContent
-            case .compact:
-                agentList(density: .compact)
-            case .expanded:
-                agentList(density: .expanded)
+        agentList
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .opacity(effectiveOpacity)
+            .contextMenu {
+                Menu("透明度") {
+                    opacityButton(title: "不透明", value: 1.0)
+                    opacityButton(title: "稍微透明", value: 0.85)
+                    opacityButton(title: "最透明", value: 0.5)
+                }
+                Divider()
+                Button("關閉懸浮面板", systemImage: "xmark", action: onClose)
             }
-        }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .opacity(effectiveOpacity)
-        .onHover { isHovering = $0 }
-        .onChange(of: effectiveMode) { _, mode in
-            onLayoutChange(mode)
-        }
-        .contextMenu {
-            Button {
-                onSetPinned(!model.isPinned, effectiveMode)
-            } label: {
-                Label(
-                    model.isPinned ? "取消釘選形態" : "釘選目前形態",
-                    systemImage: model.isPinned ? "checkmark" : "pin"
-                )
-            }
-
-            Menu("透明度") {
-                opacityButton(title: "不透明", value: 1.0)
-                opacityButton(title: "稍微透明", value: 0.85)
-                opacityButton(title: "最透明", value: 0.5)
-            }
-        }
-    }
-
-    private var effectiveMode: FloatingPanelMode {
-        FloatingPanelLayout.effectiveMode(
-            preferred: model.preferredMode,
-            isPinned: model.isPinned,
-            isHovering: isHovering,
-            agentCount: model.snapshot.rows.count,
-            isDegraded: model.snapshot.status.message != nil
-        )
     }
 
     private var effectiveOpacity: Double {
@@ -89,30 +54,11 @@ struct FloatingAgentsView: View {
         }
     }
 
-    private var dotContent: some View {
-        Button(action: onToggleMode) {
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(summaryColor)
-                    .frame(width: 9, height: 9)
-                if !model.snapshot.rows.isEmpty {
-                    Text("\(model.snapshot.rows.count)")
-                        .font(.caption2.weight(.bold))
-                        .monospacedDigit()
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(dotHelp)
-    }
-
-    private func agentList(density: FloatingAgentRowDensity) -> some View {
+    private var agentList: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             ForEach(model.snapshot.rows.prefix(AgentRegistryService.maxRows)) { row in
-                FloatingAgentRow(row: row, density: density) { onFocus(row) }
+                FloatingAgentRow(row: row) { onFocus(row) }
             }
             if model.snapshot.rows.count > AgentRegistryService.maxRows {
                 Text("另有 \(model.snapshot.rows.count - AgentRegistryService.maxRows) 個")
@@ -122,15 +68,13 @@ struct FloatingAgentsView: View {
                     .padding(.top, 2)
                     .padding(.bottom, 5)
             }
+            if let statusMessage = model.snapshot.status.message {
+                statusNote(statusMessage)
+            }
             if let focusError = model.focusError {
                 statusNote(focusError)
             }
         }
-    }
-
-    private var dotHelp: String {
-        let messages = [model.snapshot.status.message, model.focusError].compactMap { $0 }
-        return messages.isEmpty ? "展開懸浮 Agent 面板" : messages.joined(separator: "\n")
     }
 
     private func statusNote(_ message: String) -> some View {
@@ -151,23 +95,16 @@ struct FloatingAgentsView: View {
             Text("\(model.snapshot.rows.count)")
                 .font(.caption2.weight(.bold))
                 .monospacedDigit()
-            Button(action: onToggleMode) {
-                Image(systemName: "rectangle.compress.vertical")
+            Button(action: onClose) {
+                Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help("縮成狀態圓點")
+            .help("關閉懸浮面板（可從 menubar popover 重新開啟）")
         }
         .padding(.horizontal, 10)
         .padding(.top, 8)
         .padding(.bottom, 4)
-    }
-
-    private var summaryColor: Color {
-        if model.snapshot.status.message != nil { return .yellow }
-        if model.snapshot.rows.contains(where: { $0.state == .waitingApproval }) { return .orange }
-        if model.snapshot.rows.contains(where: { $0.state == .working }) { return .green }
-        return .secondary
     }
 }

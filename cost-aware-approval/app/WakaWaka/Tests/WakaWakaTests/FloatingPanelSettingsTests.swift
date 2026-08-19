@@ -4,15 +4,6 @@ import Testing
 
 @MainActor
 struct FloatingPanelSettingsTests {
-    @Test func settingPinUpdatesPreferencesAndModel() {
-        withController { controller, preferences in
-            controller.setPinned(true)
-
-            #expect(preferences.isPinned)
-            #expect(controller.model.isPinned)
-        }
-    }
-
     @Test func settingOpacityUpdatesPreferencesAndModel() {
         withController { controller, preferences in
             controller.setOpacity(0.5)
@@ -22,16 +13,16 @@ struct FloatingPanelSettingsTests {
         }
     }
 
-    @Test func pinningExpandedDisplayPreservesExpandedMode() {
-        withController { controller, preferences in
-            controller.setPinned(true, displayedMode: .expanded)
-
-            #expect(preferences.mode == .expanded)
-            #expect(controller.model.preferredMode == .expanded)
+    /// The stored opacity has to reach the model at construction, not only when
+    /// the context menu changes it — otherwise every launch starts back at 0.95.
+    @Test func storedOpacitySeedsTheModel() {
+        withController(opacity: 0.5) { controller, _ in
+            #expect(controller.model.baseOpacity == 0.5)
         }
     }
 
     private func withController(
+        opacity: Double? = nil,
         perform assertions: (FloatingAgentsPanelController, FloatingPanelPreferences) -> Void
     ) {
         let suiteName = "FloatingPanelSettingsTests.\(UUID().uuidString)"
@@ -42,6 +33,7 @@ struct FloatingPanelSettingsTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let preferences = FloatingPanelPreferences(defaults: defaults)
+        if let opacity { preferences.opacity = opacity }
         assertions(FloatingAgentsPanelController(preferences: preferences), preferences)
     }
 }

@@ -4,7 +4,7 @@ import Testing
 
 @MainActor
 struct FloatingPanelFocusErrorTests {
-    @Test func updatePublishesFocusErrorAndExpandsCompactPanel() {
+    @Test func updatePublishesFocusErrorAndGrowsPanel() {
         let suiteName = "FloatingPanelFocusErrorTests.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             Issue.record("Unable to create isolated UserDefaults suite")
@@ -12,8 +12,6 @@ struct FloatingPanelFocusErrorTests {
         }
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let preferences = FloatingPanelPreferences(defaults: defaults)
-        preferences.mode = .compact
-        preferences.isPinned = true
         let controller = FloatingAgentsPanelController(preferences: preferences)
 
         controller.update(snapshot: snapshot)

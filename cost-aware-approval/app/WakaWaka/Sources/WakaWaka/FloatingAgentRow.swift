@@ -1,27 +1,16 @@
 import SwiftUI
 
-enum FloatingAgentRowDensity {
-    case compact
-    case expanded
-}
-
 /// A HUD row keeps its own clock-driven relative label because registry snapshots
 /// intentionally stop publishing while an idle agent remains otherwise unchanged.
 struct FloatingAgentRow: View {
     let row: ActiveAgentRow
-    let density: FloatingAgentRowDensity
     let onFocus: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
         Button(action: onFocus) {
-            switch density {
-            case .compact:
-                compactContent
-            case .expanded:
-                expandedContent
-            }
+            content
         }
         .buttonStyle(.plain)
         .background(isHovering ? Color.secondary.opacity(0.12) : .clear)
@@ -29,20 +18,9 @@ struct FloatingAgentRow: View {
         .help(tooltip)
     }
 
-    private var compactContent: some View {
-        HStack(spacing: 7) {
-            stateIndicator
-            Text(row.projectName)
-                .font(.callout.weight(.medium))
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            relativeHeartbeat
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-    }
-
-    private var expandedContent: some View {
+    /// Hover only paints a highlight here — it must never change the row's size,
+    /// or the list would reflow beneath the pointer that is aiming at it.
+    private var content: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 7) {
                 stateIndicator
@@ -120,8 +98,8 @@ struct FloatingAgentRow: View {
         }
     }
 
-    /// The full path stays out of the compact surface while remaining available
-    /// for disambiguating projects that share the same final directory name.
+    /// The full path stays off the row itself while remaining available for
+    /// disambiguating projects that share the same final directory name.
     private var tooltip: String {
         var parts = ["\(row.kind.displayName) · \(stateText)", row.fullPath]
         if let model = row.model { parts.append("模型：\(model)") }

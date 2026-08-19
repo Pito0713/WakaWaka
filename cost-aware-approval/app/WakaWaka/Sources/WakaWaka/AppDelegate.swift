@@ -980,9 +980,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showFloatingPanel() {
         if floatingPanelController == nil {
-            floatingPanelController = FloatingAgentsPanelController { [weak self] row in
-                self?.focusAgentWindow(row)
-            }
+            floatingPanelController = FloatingAgentsPanelController(
+                preferences: floatingPanelPreferences,
+                onFocus: { [weak self] row in self?.focusAgentWindow(row) },
+                // Routed through setFloatingPanelVisible rather than hide(): closing
+                // from the HUD must also persist the preference and un-highlight the
+                // popover's toggle, or the panel returns on the next launch and the
+                // footer icon claims it is still open.
+                onClose: { [weak self] in self?.setFloatingPanelVisible(false) }
+            )
         }
         floatingPanelController?.update(snapshot: viewModel.activeAgents)
         floatingPanelController?.update(focusError: viewModel.agentFocusError)

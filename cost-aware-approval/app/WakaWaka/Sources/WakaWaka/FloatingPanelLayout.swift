@@ -1,34 +1,10 @@
 import AppKit
 
-enum FloatingPanelMode: String, Codable, CaseIterable {
-    case dot
-    case compact
-    case expanded
-}
-
 enum FloatingPanelLayout {
-    /// Failure and absence outrank interaction state: degraded data must collapse
-    /// to a visible warning dot regardless of saved mode, pinning, or hover, or
-    /// stale UI could masquerade as trustworthy registry data. Only a healthy,
-    /// populated panel may honor hover before falling back to the saved preference.
-    static func effectiveMode(
-        preferred: FloatingPanelMode,
-        isPinned: Bool,
-        isHovering: Bool,
-        agentCount: Int,
-        isDegraded: Bool
-    ) -> FloatingPanelMode {
-        if isDegraded {
-            return .dot
-        }
-        if agentCount == 0 {
-            return .dot
-        }
-        if !isPinned && isHovering {
-            return .expanded
-        }
-        return preferred
-    }
+    /// The HUD has exactly one form: the full detail list. Resizing under the
+    /// cursor moved the very rows the user was aiming at, so hover expansion and
+    /// the collapsed dot are both gone — the close control replaces the dot.
+    static let width: CGFloat = 300
 
     static func opacity(agentCount: Int, isDegraded: Bool, base: Double) -> Double {
         // Preserve the user's base opacity when registry access fails: unreadable
@@ -40,19 +16,6 @@ enum FloatingPanelLayout {
             return 0.35
         }
         return base
-    }
-
-    /// Only width is policy here. Height must be measured from the hosted SwiftUI
-    /// content because hand-summed constants have already clipped real sections.
-    static func width(for mode: FloatingPanelMode) -> CGFloat {
-        switch mode {
-        case .dot:
-            return 30
-        case .compact:
-            return 220
-        case .expanded:
-            return 300
-        }
     }
 }
 
