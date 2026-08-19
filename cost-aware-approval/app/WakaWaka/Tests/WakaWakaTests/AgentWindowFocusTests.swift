@@ -8,6 +8,15 @@ import Testing
 /// return: tmux session and window names are user-authored, and the tty comes
 /// from a process WakaWaka does not own.
 struct AgentWindowFocusTests {
+    private func row(_ projectName: String, kind: AgentKind) -> ActiveAgentRow {
+        ActiveAgentRow(
+            id: "\(kind.rawValue):test", kind: kind, pid: 1, pidStartedAt: nil,
+            projectName: projectName, fullPath: "/workspace/\(projectName)",
+            gitBranch: nil, model: nil, skill: nil, skillSource: nil, lastTool: nil,
+            state: .working, heartbeatAt: Date()
+        )
+    }
+
     // MARK: - What a click can tell the user
 
     @Test func everyFailureExplainsItself() {
@@ -200,6 +209,32 @@ struct AgentWindowFocusTests {
         #expect(!AgentWindowFocus.isSafeForAppleScriptLiteral("tmux\nactivate"))
     }
 
+    @Test func viewTitleIdentifiesProjectAndAgentKind() {
+        let title = AgentWindowFocus.viewTitle(for: row("WakaWaka", kind: .claudeCode))
+        #expect(title.contains("WakaWaka"))
+        #expect(title.contains("Claude Code"))
+    }
+
+    @Test func viewTitlesDistinguishAgentKindsInTheSameProject() {
+        let claude = AgentWindowFocus.viewTitle(for: row("WakaWaka", kind: .claudeCode))
+        let codex = AgentWindowFocus.viewTitle(for: row("WakaWaka", kind: .codex))
+        #expect(claude != codex)
+    }
+
+    @Test(arguments: [#"he"llo"#, #"he\llo"#])
+    func unsafeProjectNamesUseASafeTitle(projectName: String) {
+        let title = AgentWindowFocus.viewTitle(for: row(projectName, kind: .claudeCode))
+        #expect(AgentWindowFocus.isSafeForAppleScriptLiteral(title))
+        #expect(title == "Claude Code")
+    }
+
+    @Test func viewTitleIsLimitedToSixtyCharacters() {
+        let title = AgentWindowFocus.viewTitle(
+            for: row(String(repeating: "LongProject", count: 20), kind: .claudeCode)
+        )
+        #expect(title.count <= 60)
+    }
+
     // MARK: - Parsing what Terminal.app reports
 
     @Test func theTabIsFoundByTTYAndAddressedByWindowID() {
@@ -222,6 +257,5 @@ struct AgentWindowFocusTests {
         #expect(AgentWindowFocus.parseTerminalTab("130977 x /dev/ttys000", tty: "/dev/ttys000") == nil)
     }
 }
-
 
 

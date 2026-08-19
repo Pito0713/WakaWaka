@@ -11,8 +11,9 @@ import Foundation
 /// Everything that reaches a command line or a script is checked before it gets
 /// there. tmux session and window names are user-authored and can contain
 /// anything, so targets are addressed by tmux's own ids (`$3`, `@7`, `%2`) and
-/// the AppleScript is built from integers only — no untrusted text is ever
-/// interpolated into a script or a shell word.
+/// command-bearing AppleScript is built from integers only. The custom title
+/// is the sole external text interpolated into a script, and only after
+/// `isSafeForAppleScriptLiteral` rejects literal-breaking characters.
 enum AgentWindowFocus {
     enum Outcome: Equatable {
         case focused
@@ -47,10 +48,10 @@ enum AgentWindowFocus {
         guard ProcessLiveness.check(pid: row.pid, startedAt: row.pidStartedAt) != .gone else {
             return .gone
         }
-        return focus(pid: row.pid)
+        return focus(pid: row.pid, viewTitle: viewTitle(for: row))
     }
 
-    static func focus(pid: Int32) -> Outcome {
+    static func focus(pid: Int32, viewTitle: String? = nil) -> Outcome {
         guard let agentTTY = controllingTTY(of: pid) else { return .noTTY }
 
         guard let pane = tmuxPane(forTTY: agentTTY) else {
@@ -68,7 +69,17 @@ enum AgentWindowFocus {
             // The view window below is Terminal.app whatever the user attached
             // from, so it still gets them to the pane.
         }
-        return openTmuxViewWindow(for: pane)
+        return openTmuxViewWindow(for: pane, viewTitle: viewTitle)
+    }
+
+    static func viewTitle(for row: ActiveAgentRow) -> String {
+        let candidate = String("\(row.projectName) · \(row.kind.displayName)".prefix(60))
+        if isSafeForAppleScriptLiteral(candidate) { return candidate }
+
+        // AgentKind supplies this fallback, so an unsafe directory name never
+        // prevents the more important action of opening the agent's terminal.
+        let fallback = String(row.kind.displayName.prefix(60))
+        return isSafeForAppleScriptLiteral(fallback) ? fallback : ""
     }
 
     // MARK: - pid → tty
@@ -191,7 +202,7 @@ enum AgentWindowFocus {
     /// wherever it already was. Showing the pane without stealing focus is the
     /// better half of that trade. The client flag is still set so the user's own
     /// navigation inside this window does not leak back the other way.
-    private static func openTmuxViewWindow(for pane: Pane) -> Outcome {
+    private static func openTmuxViewWindow(for pane: Pane, viewTitle: String?) -> Outcome {
         guard let tmux = tmuxPath else { return .failed("找不到 tmux") }
         let viewName = viewSessionName(token: installToken, paneID: pane.paneID)
 
@@ -236,10 +247,20 @@ enum AgentWindowFocus {
             return .failed("無法組出安全的 tmux 指令")
         }
 
+        let titleCommands: String
+        if let viewTitle, isSafeForAppleScriptLiteral(viewTitle) {
+            titleCommands = """
+              set custom title of createdTab to "\(viewTitle)"
+              set title displays custom title of createdTab to true
+            """
+        } else {
+            titleCommands = ""
+        }
         let script = """
         tell application "Terminal"
           activate
-          do script "\(command)"
+          set createdTab to do script "\(command)"
+        \(titleCommands)
         end tell
         """
         guard run("/usr/bin/osascript", ["-e", script]) != nil else {
