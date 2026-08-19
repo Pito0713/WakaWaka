@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # WakaWaka 一鍵啟動腳本
 # Usage: ./start.sh [--build]
-#   --build / -b   強制重新 swift build
+#   --build / -b   跳過 mtime 比對，無條件重新 swift build
 
 set -euo pipefail
 
@@ -26,12 +26,43 @@ FORCE_BUILD=false
 for arg in "$@"; do [[ "$arg" == "--build" || "$arg" == "-b" ]] && FORCE_BUILD=true; done
 
 # ── Step 1: Build ─────────────────────────────────────────────
-if [[ ! -f "$BINARY" || "$FORCE_BUILD" == true ]]; then
-  echo "🔨 Building WakaWaka..."
+# 只看 app target 的輸入：Sources 下的 Swift 檔與 Package.swift。Tests 不進
+# binary，改測試不該觸發重 build。
+#
+# 用 awk 求最大值而不是 `sort -rn | head -1`：head 讀到第一行就結束，會讓 sort
+# 收到 SIGPIPE，在 pipefail 下整條 pipeline 算失敗，set -e 會直接中斷腳本。
+latest_source_mtime() {
+  { find "$APP_DIR/Sources" "$APP_DIR/Package.swift" -type f -name '*.swift' \
+      -exec stat -f '%m' {} + 2>/dev/null || true; } \
+    | awk 'BEGIN { newest = 0 } $1 + 0 > newest { newest = $1 + 0 } END { if (newest > 0) print newest }'
+}
+
+BUILD_REASON=""
+if [[ "$FORCE_BUILD" == true ]]; then
+  BUILD_REASON="--build 指定強制重建"
+elif [[ ! -f "$BINARY" ]]; then
+  BUILD_REASON="binary 不存在"
+else
+  # -L：$BINARY 走的是 .build/debug 這個 symlink，要拿目標檔的時間而不是連結的。
+  BINARY_MTIME=$(stat -L -f '%m' "$BINARY" 2>/dev/null || echo 0)
+  SOURCE_MTIME=$(latest_source_mtime)
+  if [[ -z "$SOURCE_MTIME" ]]; then
+    # 掃不到原始碼時寧可多 build 一次。判斷不出來就沿用舊 binary，正是這個
+    # 檢查要防的事——舊執行檔被靜悄悄跑起來，行為對不上已經 commit 的程式碼。
+    BUILD_REASON="無法判定原始碼時間"
+  elif (( SOURCE_MTIME > BINARY_MTIME )); then
+    BUILD_REASON="原始碼比 binary 新"
+  fi
+fi
+
+if [[ -n "$BUILD_REASON" ]]; then
+  # ${} 不可省略：全形括號緊接變數時 bash 會把它的首個 byte 併進變數名，
+  # set -u 下直接變成 unbound variable（與下方 SKIN_SRC 同一個坑）。
+  echo "🔨 Building WakaWaka...（${BUILD_REASON}）"
   (cd "$APP_DIR" && swift build) || fail "swift build 失敗，請確認已安裝 Xcode Command Line Tools"
   ok "Build 完成"
 else
-  ok "Binary 已存在（加 --build 可強制重新 build）"
+  ok "Binary 已是最新（原始碼自上次 build 後未變更）"
 fi
 
 # ── Step 2: 還原 menubar skin ────────────────────────────────
