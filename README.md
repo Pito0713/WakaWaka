@@ -86,7 +86,7 @@ WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依�
 │  └──────────────────────────────────────┘                   │
 │          │ 點擊 agent 列                                     │
 │          ▼                                                   │
-│  AgentWindowFocus ──► tmux grouped session / Terminal.app    │
+│  AgentWindowFocus ──► tmux 原 session / Terminal.app         │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -114,7 +114,7 @@ cost-aware-approval/
         ├── AgentRegistry.swift     # registry 檔案格式、顯示模型、pid 存活判定
         ├── AgentRegistryService.swift # registry 讀取、pid 驗證、崩潰殘留清理
         ├── ActiveAgentsView.swift  # ACTIVE AGENTS 面板（釘在待審批佇列上方）
-        ├── AgentWindowFocus.swift  # 點擊列 → 開啟該 agent 的終端機視窗（tmux / Terminal.app）
+        ├── AgentWindowFocus.swift  # 點擊列 → 跳到該 agent 的終端機（tmux 原 session / Terminal.app）
         ├── PopoverSizing.swift     # popover 高度：向 SwiftUI 量測，不用常數加總
         ├── SessionStatusView.swift # 5h 用量進度條 + 重置倒數 + server 驗證綠點
         ├── PopoverViewModel.swift  # UI 狀態管理（含 claudeUsageInfo、agyQuota）

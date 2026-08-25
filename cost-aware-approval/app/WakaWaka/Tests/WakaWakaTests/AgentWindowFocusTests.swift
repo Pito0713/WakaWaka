@@ -65,9 +65,9 @@ struct AgentWindowFocusTests {
 
     @Test func theRightPaneIsPickedByTTY() {
         let listing = """
-        /dev/ttys007\t$1\t@1\t%1
-        /dev/ttys004\t$2\t@2\t%2
-        /dev/ttys002\t$0\t@5\t%9
+        /dev/ttys007\t$1\t@1\t%1\t
+        /dev/ttys004\t$2\t@2\t%2\t1
+        /dev/ttys002\t$0\t@5\t%9\t
         """
         let pane = AgentWindowFocus.parsePane(listing, tty: "/dev/ttys002")
         #expect(pane?.sessionID == "$0")
@@ -76,6 +76,14 @@ struct AgentWindowFocusTests {
 
         #expect(AgentWindowFocus.parsePane(listing, tty: "/dev/ttys999") == nil,
                 "an agent outside tmux must not match a pane")
+    }
+
+    @Test func aLegacyGroupedViewIsNotTreatedAsTheOriginalSession() {
+        let listing = """
+        /dev/ttys002\t$7\t@5\t%9\t1
+        /dev/ttys002\t$0\t@5\t%9\t
+        """
+        #expect(AgentWindowFocus.parsePane(listing, tty: "/dev/ttys002")?.sessionID == "$0")
     }
 
     /// A pane line whose ids do not look like ids is refused outright rather
@@ -88,107 +96,109 @@ struct AgentWindowFocusTests {
         #expect(AgentWindowFocus.parsePane("", tty: "/dev/ttys002") == nil)
     }
 
-    // MARK: - Reusing a window that is already on screen
+    // MARK: - Reusing the original session
 
     /// The bug this closes: every click built a grouped "view" session and a new
     /// Terminal window, even when the user was already looking at that pane. One
     /// click on an agent you are watching would leave two windows showing it.
     @Test func aClientAlreadyShowingTheWindowIsPreferred() {
+        let pane = AgentWindowFocus.Pane(sessionID: "$0", windowID: "@1", paneID: "%2")
         let clients = """
-        /dev/ttys005\t@1
-        /dev/ttys006\t@0
+        /dev/ttys005\t$0\t@1
+        /dev/ttys006\t$0\t@0
         """
-        #expect(AgentWindowFocus.parseClientShowingWindow(clients, windowID: "@1")
-                == "/dev/ttys005")
-        #expect(AgentWindowFocus.parseClientShowingWindow(clients, windowID: "@9") == nil,
-                "nobody is watching that window; a view has to be opened")
+        #expect(AgentWindowFocus.parseOriginalClient(
+            clients, pane: pane, terminalTTYs: ["/dev/ttys005", "/dev/ttys006"]
+        ) == .init(tty: "/dev/ttys005", isShowingWindow: true))
     }
 
-    /// Attached to the right session but parked on another window is not the
-    /// same as showing the agent. Switching that client's window would move
-    /// what the user is looking at, which is the whole reason this feature
-    /// opens its own window instead of using `switch-client`.
-    @Test func aClientParkedOnAnotherWindowIsNotAMatch() {
-        #expect(AgentWindowFocus.parseClientShowingWindow("/dev/ttys005\t@7",
-                                                          windowID: "@1") == nil)
+    @Test func aClientParkedOnAnotherWindowIsStillReused() {
+        let pane = AgentWindowFocus.Pane(sessionID: "$0", windowID: "@1", paneID: "%2")
+        #expect(AgentWindowFocus.parseOriginalClient(
+            "/dev/ttys005\t$0\t@7", pane: pane, terminalTTYs: ["/dev/ttys005"]
+        )
+                == .init(tty: "/dev/ttys005", isShowingWindow: false))
     }
 
     @Test func aClientLineThatIsNotUsableIsSkipped() {
+        let pane = AgentWindowFocus.Pane(sessionID: "$0", windowID: "@1", paneID: "%2")
         let clients = """
-        (none)\t@1
-        /dev/ttys005\t@1\t@1
-        /dev/ttys006\t@1
+        (none)\t$0\t@1
+        /dev/ttys005\t$0\t@1\t@1
+        /dev/ttys006\t$0\t@1
         """
-        #expect(AgentWindowFocus.parseClientShowingWindow(clients, windowID: "@1")
-                == "/dev/ttys006", "an unusable tty and a malformed line are both skipped")
-        #expect(AgentWindowFocus.parseClientShowingWindow("", windowID: "@1") == nil)
+        #expect(AgentWindowFocus.parseOriginalClient(
+            clients, pane: pane, terminalTTYs: ["/dev/ttys006"]
+        )?.tty == "/dev/ttys006", "an unusable tty and a malformed line are both skipped")
+        #expect(AgentWindowFocus.parseOriginalClient(
+            "", pane: pane, terminalTTYs: ["/dev/ttys006"]
+        ) == nil)
     }
 
-    // MARK: - Finding a view window that is already open
-
-    /// Clicking the same agent twice must raise the window that is already
-    /// there rather than stacking another one on top of it.
-    @Test func anAlreadyOpenViewIsFoundByExactSessionName() {
+    @Test func aNonTerminalClientDoesNotHideAnExistingTerminalClient() {
+        let pane = AgentWindowFocus.Pane(sessionID: "$0", windowID: "@1", paneID: "%2")
         let clients = """
-        /dev/ttys000\tWakaWaka
-        /dev/ttys004\twakawaka-view-3
+        /dev/ttys001\t$0\t@1
+        /dev/ttys002\t$0\t@7
         """
-        #expect(AgentWindowFocus.parseClientTTY(clients, forSession: "wakawaka-view-3")
-                == "/dev/ttys004")
-        #expect(AgentWindowFocus.parseClientTTY(clients, forSession: "wakawaka-view-9") == nil)
+        #expect(AgentWindowFocus.parseOriginalClient(
+            clients, pane: pane, terminalTTYs: ["/dev/ttys002"]
+        )?.tty == "/dev/ttys002")
+        #expect(AgentWindowFocus.parseOriginalClient(
+            clients, pane: pane, terminalTTYs: []
+        ) == nil, "without a Terminal client the caller must attach the original session")
     }
 
-    /// tmux's own `has-session` matches by prefix, so it would answer yes for
-    /// `wakawaka-view-3` when only `wakawaka-view-30` exists — and the click
-    /// would try to raise a window that is not there. The comparison is done
-    /// here instead, exactly.
-    @Test func aPrefixIsNotAMatch() {
-        let clients = "/dev/ttys004\twakawaka-view-30"
-        #expect(AgentWindowFocus.parseClientTTY(clients, forSession: "wakawaka-view-3") == nil)
+    // MARK: - Whose screen this click is allowed to move
+
+    /// tmux's current window belongs to the session, so every attached client
+    /// follows it. These cases are the whole of the policy: move it only when
+    /// the person who clicked is the only one watching.
+    @Test func theOnlyClientWatchingMayBeMoved() {
+        #expect(AgentWindowFocus.mayMoveCurrentWindow(
+            sessionClients: ["/dev/ttys005"], raising: "/dev/ttys005"
+        ))
+        #expect(AgentWindowFocus.mayMoveCurrentWindow(sessionClients: [], raising: nil),
+                "nobody attached: the window opened by this click is the only viewer")
     }
 
-    @Test func aClientWithAnUnusableTTYIsSkipped() {
+    @Test func anotherClientWatchingIsLeftAlone() {
+        #expect(!AgentWindowFocus.mayMoveCurrentWindow(
+            sessionClients: ["/dev/ttys005", "/dev/ttys009"], raising: "/dev/ttys005"
+        ), "the second client would be dragged to a window it did not ask for")
+        #expect(!AgentWindowFocus.mayMoveCurrentWindow(
+            sessionClients: ["/dev/ttys009"], raising: nil
+        ), "a new window must not select for a session someone is already in")
+    }
+
+    /// The listing failed. Not knowing who is attached is not the same as
+    /// knowing nobody is, and the two must not collapse into the permissive one.
+    @Test func anUnreadableClientListingCountsAsOccupied() {
+        #expect(!AgentWindowFocus.mayMoveCurrentWindow(sessionClients: nil, raising: "/dev/ttys005"))
+        #expect(!AgentWindowFocus.mayMoveCurrentWindow(sessionClients: nil, raising: nil))
+    }
+
+    /// A client in iTerm or VS Code cannot be raised, but it still follows the
+    /// session's current window — for this question it counts like any other.
+    @Test func aClientWeCannotDriveStillCounts() {
         let clients = """
-        (none)\twakawaka-view-3
-        /dev/ttys004\twakawaka-view-3
+        /dev/ttys005\t$0\t@1
+        /dev/ttys009\t$0\t@3
+        /dev/ttys077\t$9\t@4
         """
-        #expect(AgentWindowFocus.parseClientTTY(clients, forSession: "wakawaka-view-3")
-                == "/dev/ttys004")
+        #expect(AgentWindowFocus.parseSessionClientTTYs(clients, sessionID: "$0")
+                == ["/dev/ttys005", "/dev/ttys009"],
+                "clients of other sessions are not this session's business")
+        #expect(AgentWindowFocus.parseSessionClientTTYs("", sessionID: "$0").isEmpty)
     }
 
-    // MARK: - Ownership of view sessions
-
-    /// View sessions are named with a per-install token, and marked. Both,
-    /// because a name alone is a guess: if a user session happened to carry the
-    /// name, reusing or killing it would act on their work.
-    @Test func onlyMarkedSessionsCountAsOurs() {
-        let listing = """
-        WakaWaka\t
-        wakawaka-abc123-view-2\t1
-        wakawaka-abc123-view-9\t
-        """
-        let owned = AgentWindowFocus.parseOwnedSessions(listing)
-        #expect(owned == ["wakawaka-abc123-view-2"])
-        #expect(!owned.contains("wakawaka-abc123-view-9"), "same shape, no marker, not ours")
-    }
-
-    /// A window that never opened leaves a session nobody is attached to —
-    /// `do script` cannot report that it failed. Only ours are swept.
-    @Test func onlyOurUnattachedSessionsAreSwept() {
-        let listing = """
-        WakaWaka\t\t0
-        wakawaka-abc123-view-2\t1\t0
-        wakawaka-abc123-view-5\t1\t1
-        """
-        #expect(AgentWindowFocus.parseOrphanedViews(listing) == ["wakawaka-abc123-view-2"])
-    }
-
-    @Test func viewNamesAreScopedToThisInstall() {
-        let name = AgentWindowFocus.viewSessionName(token: "abc123", paneID: "%42")
-        #expect(name == "wakawaka-abc123-view-42")
-        #expect(AgentWindowFocus.isSafeForAppleScriptLiteral(AgentWindowFocus.quoted(name)))
-        // Two installs must not fight over the same session.
-        #expect(name != AgentWindowFocus.viewSessionName(token: "def456", paneID: "%42"))
+    @Test func aClientAlreadyOnTheWindowNeedsNothingMoved() {
+        let pane = AgentWindowFocus.Pane(sessionID: "$0", windowID: "@1", paneID: "%2")
+        let match = AgentWindowFocus.parseOriginalClient(
+            "/dev/ttys005\t$0\t@1", pane: pane, terminalTTYs: ["/dev/ttys005"]
+        )
+        #expect(match?.isShowingWindow == true,
+                "raising the tab is the whole job; select-window would be a no-op")
     }
 
     // MARK: - What reaches the shell and the script
@@ -201,8 +211,19 @@ struct AgentWindowFocusTests {
         #expect(AgentWindowFocus.quoted("$3") == "'$3'")
         #expect(AgentWindowFocus.quoted("wakawaka-view-9:@2") == "'wakawaka-view-9:@2'")
 
-        #expect(AgentWindowFocus.isSafeForAppleScriptLiteral(
-            "'/opt/homebrew/bin/tmux' new-session -t '$3' -s 'wakawaka-view-9'"))
+        let command = AgentWindowFocus.attachCommand(
+            tmux: "/opt/homebrew/bin/tmux",
+            sessionID: "$3",
+            windowID: "@7"
+        )
+        #expect(command == "'/opt/homebrew/bin/tmux' attach-session -t '$3:@7'")
+        #expect(AgentWindowFocus.attachCommand(
+            tmux: "/opt/homebrew/bin/tmux", sessionID: "$3", windowID: nil
+        ) == "'/opt/homebrew/bin/tmux' attach-session -t '$3'",
+                "no window target when the session's current window must stay put")
+        #expect(!command.contains("select-window"))
+        #expect(!command.contains("new-session"))
+        #expect(AgentWindowFocus.isSafeForAppleScriptLiteral(command))
 
         #expect(!AgentWindowFocus.isSafeForAppleScriptLiteral("tmux -t \"evil\""))
         #expect(!AgentWindowFocus.isSafeForAppleScriptLiteral("tmux -t x\\"))
@@ -250,6 +271,7 @@ struct AgentWindowFocusTests {
 
         #expect(AgentWindowFocus.parseTerminalTab(listing, tty: "/dev/ttys042") == nil,
                 "a tty Terminal.app does not own is not ours to raise")
+        #expect(AgentWindowFocus.parseTerminalTTYs(listing) == ["/dev/ttys003", "/dev/ttys000"])
     }
 
     @Test func aNonNumericTerminalLineIsIgnored() {
@@ -257,5 +279,3 @@ struct AgentWindowFocusTests {
         #expect(AgentWindowFocus.parseTerminalTab("130977 x /dev/ttys000", tty: "/dev/ttys000") == nil)
     }
 }
-
-

@@ -23,6 +23,10 @@ enum AgentWindowFocus {
         case noTTY
         /// A terminal WakaWaka cannot drive — VS Code's panel, another emulator.
         case unknownTerminal
+        /// The session was reached, but its current window was left where it
+        /// was. Reported rather than done silently: the user asked to see one
+        /// window and is looking at another, and that needs saying.
+        case sharedSession
         case failed(String)
 
         var message: String? {
@@ -31,6 +35,7 @@ enum AgentWindowFocus {
             case .gone:            return "這個 agent 已經結束了"
             case .noTTY:           return "這個 agent 沒有終端機"
             case .unknownTerminal: return "找不到對應的 Terminal 視窗（僅支援 Terminal.app 與 tmux）"
+            case .sharedSession:   return "已跳到該 session；還有其他 client 在看，沒有替你切換 window"
             case .failed(let why): return why
             }
         }
@@ -58,18 +63,7 @@ enum AgentWindowFocus {
             return raiseTerminalTab(tty: agentTTY)
         }
 
-        // The window may already be on screen — the user's own attachment, or a
-        // view left open by an earlier click. Raising it is both cheaper and
-        // less surprising than stacking a second window showing the same pane,
-        // which is what this did unconditionally.
-        if let tty = attachedClientTTY(showing: pane) {
-            let raised = raiseTerminalTab(tty: tty)
-            if raised == .focused { return raised }
-            // That client lives in a terminal we cannot drive (iTerm, VS Code).
-            // The view window below is Terminal.app whatever the user attached
-            // from, so it still gets them to the pane.
-        }
-        return openTmuxViewWindow(for: pane, viewTitle: viewTitle)
+        return focusOriginalTmuxSession(pane, viewTitle: viewTitle)
     }
 
     static func viewTitle(for row: ActiveAgentRow) -> String {
@@ -124,7 +118,10 @@ enum AgentWindowFocus {
         guard let tmux = tmuxPath else { return nil }
         // Ids rather than names: a session called `-t` or `; rm -rf ~` is a
         // legal tmux name and would otherwise become an argument or worse.
-        let format = "#{pane_tty}\t#{session_id}\t#{window_id}\t#{pane_id}"
+        // The marker excludes grouped view sessions created by older WakaWaka
+        // versions. Those sessions share the pane, but they are not the user's
+        // original session and must never become the target again.
+        let format = "#{pane_tty}\t#{session_id}\t#{window_id}\t#{pane_id}\t#{@wakawaka-view}"
         guard let out = run(tmux, ["list-panes", "-a", "-F", format]) else { return nil }
         return parsePane(out, tty: tty)
     }
@@ -132,7 +129,8 @@ enum AgentWindowFocus {
     static func parsePane(_ listing: String, tty: String) -> Pane? {
         for line in listing.split(separator: "\n") {
             let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard f.count == 4, f[0] == tty else { continue }
+            guard f.count == 4 || f.count == 5, f[0] == tty else { continue }
+            guard f.count == 4 || f[4] != "1" else { continue }
             // One bad field disqualifies the whole line: these become argv.
             guard isValidTmuxID(f[1]), isValidTmuxID(f[2]), isValidTmuxID(f[3]) else { return nil }
             return Pane(sessionID: f[1], windowID: f[2], paneID: f[3])
@@ -140,110 +138,96 @@ enum AgentWindowFocus {
         return nil
     }
 
-    /// The tty of a client that is already displaying this pane's window.
-    ///
-    /// Matched on the window rather than on the session: grouped sessions share
-    /// windows, so a client sitting in the agent's own session and one sitting
-    /// in a view of it are showing the same thing, and either is worth raising.
-    private static func attachedClientTTY(showing pane: Pane) -> String? {
-        guard let tmux = tmuxPath else { return nil }
-        // `#{window_id}` on a client is the window that client is currently
-        // looking at, which is the question being asked here — a client
-        // attached to the right session but parked on another window is not
-        // showing the agent, and switching it would move the user's own view.
-        guard let listing = run(tmux, ["list-clients", "-F", "#{client_tty}\t#{window_id}"])
-        else { return nil }
-        return parseClientShowingWindow(listing, windowID: pane.windowID)
+    struct ClientMatch: Equatable {
+        let tty: String
+        /// Already looking at the agent's window, so nothing has to move for
+        /// this click to land.
+        let isShowingWindow: Bool
     }
 
-    static func parseClientShowingWindow(_ listing: String, windowID: String) -> String? {
+    /// A Terminal client attached to the agent's own session. One already
+    /// showing the target window wins; otherwise a client parked on another
+    /// window is reused, because the click explicitly asks to go there.
+    static func parseOriginalClient(_ listing: String, pane: Pane,
+                                    terminalTTYs: Set<String>) -> ClientMatch? {
+        var parked: ClientMatch?
         for line in listing.split(separator: "\n") {
             let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard f.count == 2, f[1] == windowID, isValidTTY(f[0]) else { continue }
-            return f[0]
+            guard f.count == 3, f[1] == pane.sessionID,
+                  terminalTTYs.contains(f[0]), isValidTTY(f[0]) else { continue }
+            if f[2] == pane.windowID { return ClientMatch(tty: f[0], isShowingWindow: true) }
+            parked = parked ?? ClientMatch(tty: f[0], isShowingWindow: false)
         }
-        return nil
+        return parked
     }
 
-    /// A per-install token, so a view session can never collide with one the
-    /// user made. Persisted rather than random per launch: clicking the same
-    /// agent after a restart should still find the window already open.
-    static var installToken: String {
-        let key = "agentViewSessionToken"
-        if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
-            return existing
+    /// Every client attached to this session, whatever terminal it lives in.
+    /// A client in iTerm or VS Code cannot be raised, but it still follows the
+    /// session's current window — for the question "would moving that window
+    /// disturb someone", it counts exactly as much as one in Terminal.app.
+    static func parseSessionClientTTYs(_ listing: String, sessionID: String) -> Set<String> {
+        var ttys: Set<String> = []
+        for line in listing.split(separator: "\n") {
+            let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard f.count == 3, f[1] == sessionID, !f[0].isEmpty else { continue }
+            ttys.insert(f[0])
         }
-        let token = String(UUID().uuidString.prefix(8)).lowercased()
-        UserDefaults.standard.set(token, forKey: key)
-        return token
+        return ttys
     }
 
-    /// Marks a session as ours. Checked before anything is reused or killed, so
-    /// a name that somehow matches a real user session is still left alone.
-    private static let ownershipOption = "@wakawaka-view"
-
-    static func viewSessionName(token: String, paneID: String) -> String {
-        "wakawaka-\(token)-view-\(paneID.dropFirst())"
+    /// Whether this click may move the session's current window.
+    ///
+    /// The current window belongs to the **session**, not to a client, so every
+    /// attached client follows it. Moving it is only ours to do when the person
+    /// who clicked is the one watching — otherwise the click would yank someone
+    /// else's screen, possibly on another machine, with nothing on it to say
+    /// what happened. `nil` is the client listing we could not read: not
+    /// knowing who is attached is not the same as knowing nobody is.
+    static func mayMoveCurrentWindow(sessionClients: Set<String>?, raising tty: String?) -> Bool {
+        guard let sessionClients else { return false }
+        return sessionClients.subtracting(tty.map { Set([$0]) } ?? []).isEmpty
     }
 
-    /// Opens the agent's tmux window in a window of its own — the last resort,
-    /// for a pane no attached client is currently showing.
-    ///
-    /// `switch-client` was the obvious primitive and the wrong one: it moves the
-    /// client the user is already sitting in. A *grouped* session was the second
-    /// answer and only half right — current-window is per-session, so selecting
-    /// the window is safe, but the **active pane is a property of the window**
-    /// and grouped sessions share windows. Selecting the pane therefore moved
-    /// the keyboard focus of anyone else viewing it, measurably, and the
-    /// `active-pane` client flag does not prevent it either.
-    ///
-    /// So the pane is not selected. The new window opens on the agent's tmux
-    /// window with the pane visible; if that window is split, focus stays
-    /// wherever it already was. Showing the pane without stealing focus is the
-    /// better half of that trade. The client flag is still set so the user's own
-    /// navigation inside this window does not leak back the other way.
-    private static func openTmuxViewWindow(for pane: Pane, viewTitle: String?) -> Outcome {
+    private static func focusOriginalTmuxSession(_ pane: Pane, viewTitle: String?) -> Outcome {
         guard let tmux = tmuxPath else { return .failed("找不到 tmux") }
-        let viewName = viewSessionName(token: installToken, paneID: pane.paneID)
+        let clientFormat = "#{client_tty}\t#{session_id}\t#{window_id}"
+        guard let terminalTabs = terminalTabListing() else {
+            return .failed("無法讀取 Terminal.app 視窗（可能需要在系統設定授權自動化）")
+        }
+        let terminalTTYs = parseTerminalTTYs(terminalTabs)
+        let clients = run(tmux, ["list-clients", "-F", clientFormat])
+        // A listing we could not read is not evidence that nobody is watching;
+        // `mayMoveCurrentWindow` reads that nil as occupied, so a failed lookup
+        // costs the user one keystroke rather than costing someone else their
+        // screen.
+        let sessionClients = clients.map { parseSessionClientTTYs($0, sessionID: pane.sessionID) }
 
-        // A window opened earlier and never attached leaves a session behind;
-        // clear ours out before making another.
-        sweepOrphanedViews(tmux: tmux)
-
-        if let tty = ownedViewClientTTY(viewName, tmux: tmux) {
-            guard run(tmux, ["select-window", "-t", "\(viewName):\(pane.windowID)"]) != nil else {
+        if let clients, let match = parseOriginalClient(clients, pane: pane, terminalTTYs: terminalTTYs) {
+            let raised = raiseTerminalTab(tty: match.tty, listing: terminalTabs)
+            guard raised == .focused else { return raised }
+            // Already on the agent's window: raising the tab was the whole job.
+            if match.isShowingWindow { return .focused }
+            guard mayMoveCurrentWindow(sessionClients: sessionClients, raising: match.tty) else {
+                return .sharedSession
+            }
+            let targetWindow = "\(pane.sessionID):\(pane.windowID)"
+            guard run(tmux, ["select-window", "-t", targetWindow]) != nil else {
                 return .failed("無法切換到該 agent 的 tmux window")
             }
-            return raiseTerminalTab(tty: tty)
+            return .focused
         }
 
-        // Created here rather than inside the Terminal command because
-        // `do script` reports only that Terminal accepted the text — it cannot
-        // say whether the command worked. Built through argv, a failure to group
-        // (session gone, name taken) is visible right now.
-        guard run(tmux, ["new-session", "-d", "-t", pane.sessionID, "-s", viewName]) != nil else {
-            return .failed("無法建立 tmux 檢視 session")
-        }
-        _ = run(tmux, ["set-option", "-t", viewName, ownershipOption, "1"])
-        guard run(tmux, ["select-window", "-t", "\(viewName):\(pane.windowID)"]) != nil else {
-            killOwnedView(viewName, tmux: tmux)
-            return .failed("無法切換到該 agent 的 tmux window")
-        }
+        // No Terminal client to raise, so a window is opened. Attaching with a
+        // window target selects it for the whole session, which is the same
+        // move as `select-window` and gets the same answer.
+        let isAlone = mayMoveCurrentWindow(sessionClients: sessionClients, raising: nil)
+        let command = attachCommand(
+            tmux: tmux,
+            sessionID: pane.sessionID,
+            windowID: isAlone ? pane.windowID : nil
+        )
 
-        // `destroy-unattached` is set from inside the chain: applied to a
-        // session nobody has attached to yet it fires immediately and kills the
-        // session out from under the window being opened.
-        let command = [
-            quoted(tmux), "attach-session",
-            "-t", quoted(viewName),
-            "-f", "active-pane",
-            "';'", "set-option", "destroy-unattached", "on",
-        ].joined(separator: " ")
-
-        // Belt and braces: every value above is validated, and this guarantees
-        // nothing can break out of the AppleScript string literal regardless.
         guard isSafeForAppleScriptLiteral(command) else {
-            killOwnedView(viewName, tmux: tmux)
             return .failed("無法組出安全的 tmux 指令")
         }
 
@@ -264,75 +248,21 @@ enum AgentWindowFocus {
         end tell
         """
         guard run("/usr/bin/osascript", ["-e", script]) != nil else {
-            killOwnedView(viewName, tmux: tmux)
             return .failed("無法開啟新的 Terminal 視窗（可能需要在系統設定授權自動化）")
         }
-        return .focused
+        return isAlone ? .focused : .sharedSession
     }
 
-    /// The tty of the client viewing our session of this name — and only ours.
-    private static func ownedViewClientTTY(_ viewName: String, tmux: String) -> String? {
-        guard isOwnedView(viewName, tmux: tmux) else { return nil }
-        // `has-session` matches by prefix, so the name comparison happens here.
-        guard let listing = run(tmux, ["list-clients", "-F", "#{client_tty}\t#{session_name}"])
-        else { return nil }
-        return parseClientTTY(listing, forSession: viewName)
-    }
-
-    private static func isOwnedView(_ viewName: String, tmux: String) -> Bool {
-        guard let listing = run(tmux, ["list-sessions",
-                                       "-F", "#{session_name}\t#{\(ownershipOption)}"])
-        else { return false }
-        return parseOwnedSessions(listing).contains(viewName)
-    }
-
-    /// Session names that carry our ownership marker.
-    static func parseOwnedSessions(_ listing: String) -> Set<String> {
-        var owned: Set<String> = []
-        for line in listing.split(separator: "\n") {
-            let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard f.count == 2, f[1] == "1" else { continue }
-            owned.insert(f[0])
-        }
-        return owned
-    }
-
-    private static func killOwnedView(_ viewName: String, tmux: String) {
-        guard isOwnedView(viewName, tmux: tmux) else { return }
-        _ = run(tmux, ["kill-session", "-t", viewName])
-    }
-
-    /// Removes view sessions of ours that nobody is attached to. `do script`
-    /// cannot report failure, so a window that never opened would otherwise
-    /// leave its session behind forever.
-    private static func sweepOrphanedViews(tmux: String) {
-        guard let listing = run(tmux, ["list-sessions",
-                                       "-F", "#{session_name}\t#{\(ownershipOption)}\t#{session_attached}"])
-        else { return }
-        for name in parseOrphanedViews(listing) {
-            _ = run(tmux, ["kill-session", "-t", name])
-        }
-    }
-
-    static func parseOrphanedViews(_ listing: String) -> [String] {
-        listing.split(separator: "\n").compactMap { line in
-            let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard f.count == 3, f[1] == "1", f[2] == "0" else { return nil }
-            return f[0]
-        }
+    /// Without a window the target is the session alone, which attaches
+    /// wherever it already is and moves nobody.
+    static func attachCommand(tmux: String, sessionID: String, windowID: String?) -> String {
+        let target = windowID.map { "\(sessionID):\($0)" } ?? sessionID
+        return [quoted(tmux), "attach-session", "-t", quoted(target)]
+            .joined(separator: " ")
     }
 
     static func isSafeForAppleScriptLiteral(_ command: String) -> Bool {
         !command.contains("\"") && !command.contains("\\") && !command.contains("\n")
-    }
-
-    static func parseClientTTY(_ listing: String, forSession name: String) -> String? {
-        for line in listing.split(separator: "\n") {
-            let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard f.count == 2, f[1] == name, isValidTTY(f[0]) else { continue }
-            return f[0]
-        }
-        return nil
     }
 
     /// Single quotes only. Every caller passes a value already checked against a
@@ -345,6 +275,13 @@ enum AgentWindowFocus {
     /// Raises the tab whose tty matches, by window id so a window opening or
     /// closing between the two scripts cannot redirect the second one.
     private static func raiseTerminalTab(tty: String) -> Outcome {
+        guard let listing = terminalTabListing() else {
+            return .failed("無法讀取 Terminal.app 視窗（可能需要在系統設定授權自動化）")
+        }
+        return raiseTerminalTab(tty: tty, listing: listing)
+    }
+
+    private static func terminalTabListing() -> String? {
         let query = """
         tell application "Terminal"
           set out to ""
@@ -356,11 +293,10 @@ enum AgentWindowFocus {
           return out
         end tell
         """
-        guard let listing = run("/usr/bin/osascript", ["-e", query]) else {
-            // Most often this is the Automation permission being denied.
-            return .failed("無法讀取 Terminal.app 視窗（可能需要在系統設定授權自動化）")
-        }
+        return run("/usr/bin/osascript", ["-e", query])
+    }
 
+    private static func raiseTerminalTab(tty: String, listing: String) -> Outcome {
         guard let target = parseTerminalTab(listing, tty: tty) else { return .unknownTerminal }
 
         // Only integers reach this script.
@@ -375,6 +311,14 @@ enum AgentWindowFocus {
             return .failed("無法切換 Terminal.app 視窗")
         }
         return .focused
+    }
+
+    static func parseTerminalTTYs(_ listing: String) -> Set<String> {
+        Set(listing.split(separator: "\n").compactMap { line in
+            let fields = line.split(separator: " ").map(String.init)
+            guard fields.count == 3, isValidTTY(fields[2]) else { return nil }
+            return fields[2]
+        })
     }
 
     static func parseTerminalTab(_ listing: String, tty: String) -> (window: Int, tab: Int)? {
