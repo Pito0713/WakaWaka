@@ -49,7 +49,6 @@ struct PopoverFooter: View {
                 agentToggle(label: "agy",    agent: .agy,        state: model.agyAutoMode,        now: context.date)
                 agentToggle(label: "Codex",  agent: .codex,      state: model.codexAutoMode,      now: context.date)
                 Spacer()
-                floatingPanelButton
                 dashboardButton
                 refreshButton
             }
@@ -99,20 +98,6 @@ struct PopoverFooter: View {
         }
         .buttonStyle(.plain)
         .help("每日用量儀表板")
-    }
-
-    private var floatingPanelButton: some View {
-        Button {
-            let isVisible = !model.isFloatingPanelVisible
-            model.isFloatingPanelVisible = isVisible
-            model.onToggleFloatingPanel(isVisible)
-        } label: {
-            Image(systemName: "macwindow.on.rectangle")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(model.isFloatingPanelVisible ? Color.accentColor : .secondary)
-        }
-        .buttonStyle(.plain)
-        .help(model.isFloatingPanelVisible ? "關閉懸浮 Agent 面板" : "開啟懸浮 Agent 面板")
     }
 
     private var refreshButton: some View {

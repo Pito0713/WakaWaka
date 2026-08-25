@@ -17,6 +17,10 @@ struct ActiveAgentsView: View {
     /// Re-scan now, verifying every process rather than trusting the grace period.
     var onRefresh: () -> Void = {}
     var isRefreshing: Bool = false
+    /// Show or hide the detachable HUD. The control lives here rather than in
+    /// the footer because what it detaches is this section, not the popover.
+    var onToggleFloatingPanel: (Bool) -> Void = { _ in }
+    var isFloatingPanelVisible: Bool = false
     /// Why the last click did not reach a window. Shown rather than swallowed:
     /// a click that silently does nothing reads as a broken panel.
     var focusError: String? = nil
@@ -60,10 +64,24 @@ struct ActiveAgentsView: View {
                     .foregroundStyle(.secondary)
                     .clipShape(Capsule())
             }
+            floatingPanelButton
             refreshButton
         }
         .padding(.horizontal, 14)
         .padding(.bottom, 6)
+    }
+
+    private var floatingPanelButton: some View {
+        Button {
+            onToggleFloatingPanel(!isFloatingPanelVisible)
+        } label: {
+            Image(systemName: "macwindow.on.rectangle")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isFloatingPanelVisible ? Color.accentColor : .secondary)
+        }
+        .buttonStyle(.plain)
+        .help(isFloatingPanelVisible ? "關閉懸浮 Agent 面板" : "開啟懸浮 Agent 面板")
+        .accessibilityLabel(isFloatingPanelVisible ? "關閉懸浮 Agent 面板" : "開啟懸浮 Agent 面板")
     }
 
     /// The panel already refreshes every second, but a row only disappears once

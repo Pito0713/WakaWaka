@@ -64,6 +64,11 @@ struct ContentView: View {
                 onFocus: { model.onFocusAgent($0) },
                 onRefresh: { model.onRefreshAgents() },
                 isRefreshing: model.isRefreshingAgents,
+                onToggleFloatingPanel: { isVisible in
+                    model.isFloatingPanelVisible = isVisible
+                    model.onToggleFloatingPanel(isVisible)
+                },
+                isFloatingPanelVisible: model.isFloatingPanelVisible,
                 focusError: model.agentFocusError
             )
         }
