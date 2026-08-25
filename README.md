@@ -17,7 +17,8 @@ WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依�
 
 | 功能                 | 說明                                                                                                     |
 | -------------------- | -------------------------------------------------------------------------------------------------------- |
-| **Active Agents 面板** | popover 頂端列出現在活著的 agent session：專案、branch、狀態、正在跑的工具或 skill。以 pid 判定存活而非時間新舊，崩潰的 session 會消失而不是繼續顯示。點一列即切換到該 agent 的終端機視窗；旁邊的刷新鈕強制重新檢查所有行程 |
+| **Active Agents 面板** | popover 底部列出現在活著的 agent session：專案、branch、狀態、正在跑的工具或 skill。以 pid 判定存活而非時間新舊，崩潰的 session 會消失而不是繼續顯示。點一列即切換到該 agent 的終端機視窗；旁邊的刷新鈕強制重新檢查所有行程 |
+| **懸浮 Agent HUD**   | 把上面那份清單拉出 popover：常駐置頂、不搶焦點的小視窗，不必點 menu bar 就知道誰在跑、誰卡住。`NSPanel` + `.nonactivatingPanel`，點一列直接跳該 agent 的終端機而不會先把焦點搶過來；位置與可見狀態記在偏好設定 |
 | **三層風險分類**     | CRITICAL → HIGH → MEDIUM；各 agent adapter 採 fail-closed 策略，Codex 的 CRITICAL shell 操作會立即拒絕 |
 | **Auto 模式**        | per-agent 開關；開啟後自動放行白名單 MEDIUM（Edit/Write/MultiEdit + 未知 bash），HIGH/CRITICAL 與 MCP 仍彈窗；30 分鐘 TTL + fail-closed 稽核（`~/.wakawaka/auto-audit.jsonl`） |
 | **多代理支援**       | 同時守護 Claude Code、Codex 與 agy，agent badge 顯示工具呼叫來源                                         |
@@ -84,6 +85,7 @@ WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依�
 │  │  - 5h 用量進度條 + server 驗證綠點    │                   │
 │  │  - diff 展開全文 toggle              │                   │
 │  └──────────────────────────────────────┘                   │
+│          ├──► FloatingAgentsPanel（常駐置頂 HUD，不搶焦點）  │
 │          │ 點擊 agent 列                                     │
 │          ▼                                                   │
 │  AgentWindowFocus ──► tmux 原 session / Terminal.app         │
@@ -113,8 +115,15 @@ cost-aware-approval/
         ├── ContentView.swift       # 待審批佇列 UI（agent badge、展開全文）
         ├── AgentRegistry.swift     # registry 檔案格式、顯示模型、pid 存活判定
         ├── AgentRegistryService.swift # registry 讀取、pid 驗證、崩潰殘留清理
-        ├── ActiveAgentsView.swift  # ACTIVE AGENTS 面板（釘在待審批佇列上方）
+        ├── ActiveAgentsView.swift  # ACTIVE AGENTS 面板（popover 底部、控制列之下）
         ├── AgentWindowFocus.swift  # 點擊列 → 跳到該 agent 的終端機（tmux 原 session / Terminal.app）
+        ├── FloatingAgentsPanel.swift    # 懸浮 HUD 的視窗控制：NSPanel、位置記憶、螢幕拔除時 clamp
+        ├── FloatingAgentsView.swift     # 懸浮 HUD 內容（含 degraded 與 focus 失敗列）
+        ├── FloatingAgentRow.swift       # 懸浮 HUD 單列
+        ├── FloatingPanelModel.swift     # HUD 的 ObservableObject：hover 高亮與計時器不隨快照重建
+        ├── FloatingPanelSizing.swift    # HUD 高度量測（量測副本鎖定要渲染的形態）
+        ├── FloatingPanelLayout.swift    # HUD 版面常數與 clamp 規則
+        ├── FloatingPanelPreferences.swift # HUD 可見狀態與透明度偏好
         ├── PopoverSizing.swift     # popover 高度：向 SwiftUI 量測，不用常數加總
         ├── SessionStatusView.swift # 5h 用量進度條 + 重置倒數 + server 驗證綠點
         ├── PopoverViewModel.swift  # UI 狀態管理（含 claudeUsageInfo、agyQuota）
@@ -278,8 +287,12 @@ node --test cost-aware-approval/hooks/*.test.mjs
 ~/.wakawaka/
 ├── state/
 │   ├── pending_<session_id>.json   # hook 寫入，等待審批
-│   └── decision_<session_id>.json  # app 寫入，hook 讀取
+│   ├── decision_<session_id>.json  # app 寫入，hook 讀取
+│   └── agent_<kind>_<sid>.json     # lifecycle hook 寫入，active agents 面板讀取（只存 metadata）
 ├── allowlist.json                   # 使用者自定義 MEDIUM 指令白名單
+├── settings.json                    # per-agent Auto 模式開關與到期時間（app 寫、hook 讀）
+├── auto-audit.jsonl                 # Auto 模式自動放行稽核紀錄
+├── skins/<name>/                    # menu bar 圖示 frame set（2x PNG）
 └── session-log.jsonl                # Token 用量歷史紀錄（每分鐘一筆）
 ```
 
@@ -394,6 +407,51 @@ P90 偵測在以下情況會有大誤差：
 ## Changelog
 
 版本格式：`v主版本.功能版本.修補版本`，遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/) 規範。
+
+---
+
+### v0.20.0 — 2026-08-19
+
+懸浮 Active Agents HUD：把 popover 裡的面板拉成一個常駐置頂、不搶焦點的小視窗。對應 `floating-agents-panel-plan.md`。
+
+#### Added
+
+- **懸浮 Agent HUD**（`FloatingAgentsPanel` / `FloatingAgentsView` / `FloatingAgentRow` / `FloatingPanelModel` / `FloatingPanelSizing` / `FloatingPanelLayout` / `FloatingPanelPreferences`）：ACTIVE AGENTS 面板只存在於 popover 內，要看一眼就得先點 menu bar 圖示。多個 agent 並行時，使用者真正要的是**不必動手**就知道誰在工作、誰卡住。從 popover footer 的 `macwindow.on.rectangle` 開關，位置以 `setFrameAutosaveName` 記住，螢幕拔除時 clamp 回可見範圍。
+- **視窗是 `NSPanel` + `.nonactivatingPanel`，不是 `NSWindow`**。本 app 以 `.accessory` 執行，一般視窗要接得到點擊必須先 `NSApp.activate`（`UsageDashboardWindow` 就是這樣，對主動開啟的儀表板是對的）。但 HUD 點一列的語義是「跳到那個 agent 的終端機」，先啟動 WakaWaka 會讓焦點彈兩次，還會踢掉使用者正在打字的視窗。這是整個設計唯一可能被推翻的假設，因此獨立成第一階段先驗證；變異測試證明該測試有效（把 `show()` 換成 `NSApp.activate + makeKeyAndOrderFront`，測試確實轉紅）。
+- **相對時間用 `Text(_, style: .relative)`，不自行計算字串**：閒置 agent 的心跳不會變，快照比較相等就不會重新發布，手算的標籤會永遠停在「3 秒前」而實際上已過了十分鐘。
+- **HUD 不會因為沒有 agent 就自己隱藏**。會消失的視窗讓「沒有 agent 在跑」與「HUD 壞了」無法區分——與 `SourceStatus` 存在的理由相同。讀取 registry 失敗時，原因佔一整列顯示。
+- **點擊失敗的原因也顯示在 HUD**。popover 早就會說明為什麼抬不起終端機（agent 已結束、沒有 tty、終端機無法從外部驅動），HUD 原本把訊息丟掉，於是點下去既沒反應也沒說明，讀起來像面板壞了而不是跳轉失敗。訊息會改變視窗高度，所以先寫入再重新量測——設定了卻不重算，那行「用來解釋失敗的字」自己會被裁掉。
+- **透明度三段**，右鍵選單切換。
+
+#### Changed
+
+- **HUD 從三形態（dot / compact / expanded）收斂成單一形態**。形態會在游標底下切換，等於移動使用者正要點的那幾列。現在固定 300pt 寬、只畫明細列，hover 只上高亮。收合用的 dot 消失後，header 的控制項語義從「縮小」改為「關閉」，並且走 `setFloatingPanelVisible` 而非 `hide()`——否則偏好仍是啟用，下次啟動面板又會自己回來，而 popover 的開關卻顯示它是開著的。釘選只為了鎖住形態不被 hover 展開而存在，跟著 hover 行為一起移除。淨 −249 行。
+
+#### Fixed
+
+- **HUD 量測用的形態與實際渲染的形態不一致**（獨立審查發現）：高度取自 live model、寬度取自請求的形態。compact 被 hover 成 `.expanded` 時因此要了 300pt 的寬、卻量了背後 compact 的列——三個 agent 的情況短 48pt，hover 想露出的列反而被裁掉。`FloatingPanelSizing` 本來就有守衛（量測副本鎖定請求的形態），但 controller 為了把 `focusError` 算進高度另外寫了一份量測，修了 A 的同時把擋 B 的守衛拆掉。現在量測副本自己帶 `focusError`，量測路徑只剩一條。同一次修正也處理釘選只保留旗標、不保留螢幕上形狀的問題（釘選一個 hover 展開的面板會把它收回儲存的 compact 偏好，與「釘選目前形態」的承諾相反）。
+- **點擊列開出來的 Terminal 視窗以指令命名**：標題是 `tmux attach-session -t wakawaka-<token>-view-0 …`，兩半都沒有意義——token 是 per-install 的 UUID 前綴，同一台機器每個視窗都一樣；尾碼是面板從不顯示的 tmux pane id。開個幾扇視窗就分不出哪扇裝著哪個 agent。改為顯示專案與 agent 種類。種類不是裝飾：回報者有兩列都叫 WakaWaka，一個 Claude Code、一個 Codex，光看專案分不開。這是第一份進到 AppleScript 的外部文字，因此套用與指令相同的字面值檢查；不安全的目錄名退回只顯示種類，而不是讓跳轉失敗——**到得了終端機比標得漂亮重要**。
+- **`start.sh` 只在 binary 不存在時才 build**，所以改完 code 跑 `./start.sh` 會重新啟動舊的執行檔，app 與已提交的原始碼默默不一致——懸浮 HUD 一度看起來「沒做出來」，其實只是跑著的行程比它還舊。改為比較 `Sources/**/*.swift` 與 `Package.swift` 的最新 mtime 和 binary 自己的 mtime，binary 較舊就重建；測試檔不列入比較（不會進到 app binary）。`--build` 的語義從「要不要 build」變成「跳過這個比較」。過程中繞開三個在 `set -euo pipefail` 下會直接中止腳本的 shell 陷阱：`sort -rn | head -1` 會讓 sort 收到 SIGPIPE、`find` 掃不存在的路徑回傳非零、全形括號緊接在 `$BUILD_REASON` 後面會被吃掉第一個位元組當成變數名的一部分。
+
+---
+
+### v0.19.0 — 2026-08-17
+
+Active Agents 面板的三個修正：補登記漏掉的 session、重用已經開著的視窗、把 Codex 與 Claude Code 分開。
+
+#### Added
+
+- **`upsertEntry` 會為沒被 `SessionStart` 登記過的 session 補建 entry**。原本只有 `SessionStart` 會建檔，其餘 hook 一律只更新不建立——hook 安裝前就開著的視窗，或是 entry 被清掉但視窗還活著的 session，從此再也不會出現在面板上，刷新鈕也救不了（reader 只能顯示存在的檔案）。補建走的是與 `SessionStart` 完全相同的建構路徑。原本反對補建的理由是「補出來的 entry 沒有 pid 與啟動時間，會留下存活判定永遠退不掉的殭屍列」，但那只對盲目 update 成立，對從 hook 自己的行程鏈建出來的 entry 不成立。
+- 補建刻意不放在審批路徑上：`PreToolUse` 仍然只更新不建立（解析 pid 要跑好幾次 `ps`，而該 hook 跑在每一次審批決策之前），`Stop` 同理——否則一個晚到的 `Stop` 會把已經 `SessionEnd` 的 session 重新放回面板。
+
+#### Fixed
+
+- **Codex session 全被歸類成 Claude Code，面板從來沒顯示過任何 Codex 列**。Codex 的 hook payload 不指名 agent，session id 的拼法也與 Claude Code 一模一樣，`detectKind` 於是落到最弱的那條規則。判別依據改用 transcript 路徑：Codex 的 transcript 在 `~/.codex`、Claude Code 在 `~/.claude`——那是執行中 agent 的**性質**，而不是它自己選擇要送的欄位，而且不需要改 `.codex/hooks.json`。後者比看起來重要：先前試過在該檔用環境變數標記 agent 並實測，Codex 會為每個 hook 註冊存一份 trust hash，指令一旦改變就靜默跳過該註冊——六個 hook 全部停止執行。`detectKind` 仍然接受 `WAKAWAKA_AGENT`，但排在明確的 payload 欄位之後：環境變數會被繼承，一個忘了 unset 的 shell 不該把已經指名自己的 session 改判到別的 agent 名下。payload 形狀取自 codex-cli 0.147.0 實測，非推測。
+- **已經在看的 pane 會再開一扇視窗**：點任何一列都無條件建立 grouped tmux 檢視 session 與新的 Terminal 視窗，於是點一下你正在看的那個 agent，會得到兩扇顯示同一件事的視窗。`focus()` 現在先問「有沒有哪個已連線的 client 正在顯示這個 pane 所屬的 window」，有就抬起它的分頁。比對用 window id 而非 session：grouped session 共用 window，使用者自己的連線與它的檢視顯示的是同一個 pane。停在別的 window 上的 client **刻意不算命中**——切過去會搬動使用者正在看的東西，而那正是這個功能寧可自己開視窗也不用 `switch-client` 的原因。若該 client 位於無法驅動的終端機（iTerm、VS Code），仍照舊開檢視視窗。
+
+#### Changed
+
+- **ACTIVE AGENTS 面板從 popover 頂端移到底部**，位於控制列之下，並自己畫上分隔線。
 
 ---
 
