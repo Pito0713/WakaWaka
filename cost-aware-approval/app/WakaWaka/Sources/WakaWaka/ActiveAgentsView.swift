@@ -10,6 +10,8 @@ import SwiftUI
 /// not nothing: a status message is shown even with no rows, because a silent
 /// empty panel is indistinguishable from a working one.
 struct ActiveAgentsView: View {
+    @State private var refreshRotation = 0.0
+
     let snapshot: ActiveAgentsSnapshot
     /// Bring this agent's terminal to the front. Defaults to nothing so the
     /// layout tests can build the view without a host.
@@ -89,19 +91,36 @@ struct ActiveAgentsView: View {
     /// This forces one, which is the difference between "wait a minute" and
     /// "tell me now" after an agent has crashed.
     private var refreshButton: some View {
-        Button(action: onRefresh) {
+        Button {
+            guard !isRefreshing else { return }
+            onRefresh()
+        } label: {
             Image(systemName: "arrow.clockwise")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(isRefreshing ? 360 : 0))
-                .animation(isRefreshing
-                           ? .linear(duration: 0.8).repeatForever(autoreverses: false)
-                           : .default,
-                           value: isRefreshing)
+                .rotationEffect(.degrees(refreshRotation))
         }
         .buttonStyle(.plain)
         .disabled(isRefreshing)
         .help("重新檢查所有 agent 是否還活著")
+        .accessibilityLabel("重新檢查所有 agent 是否還活著")
+        // The spin is tied to the work, not to a duration guessed here: a
+        // forced refresh verifies every process, so it can outlast any fixed
+        // animation — and a button that is disabled and motionless reads as a
+        // hung panel, which is the opposite of what this button is for.
+        .onChange(of: isRefreshing) { _, isSpinning in
+            if isSpinning {
+                withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
+                    refreshRotation += 360
+                }
+            } else {
+                // Landing on the next whole turn ends the loop where the icon
+                // already is; assigning 0 would snap it backwards instead.
+                withAnimation(.linear(duration: 0.2)) {
+                    refreshRotation = (refreshRotation / 360).rounded(.up) * 360
+                }
+            }
+        }
     }
 
     private func overflowNote(_ count: Int) -> some View {
