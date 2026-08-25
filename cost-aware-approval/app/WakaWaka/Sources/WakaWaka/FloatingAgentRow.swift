@@ -24,7 +24,7 @@ struct FloatingAgentRow: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 7) {
                 stateIndicator
-                Text(row.projectName)
+                Text(row.displayTitle)
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                 if let gitBranch = row.gitBranch {

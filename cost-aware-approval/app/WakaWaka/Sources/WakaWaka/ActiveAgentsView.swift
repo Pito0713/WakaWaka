@@ -124,7 +124,7 @@ private struct AgentRow: View {
                 Circle()
                     .fill(stateColor)
                     .frame(width: 7, height: 7)
-                Text(row.projectName)
+                Text(row.displayTitle)
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                 if let branch = row.gitBranch {

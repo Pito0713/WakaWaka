@@ -144,7 +144,16 @@ export function upsertEntry(payload, mutate) {
   const kind = detectKind(payload);
   const sessionId = detectSessionId(payload);
   if (!kind || !isValidSessionId(sessionId)) return false;
-  if (updateEntry(kind, sessionId, mutate)) return true;
+  // A detection failure — tmux hung past the timeout, or exited non-zero —
+  // arrives as the same `null` as "this session is not in tmux", and the two
+  // cannot be told apart from here. Writing it either way would erase a name
+  // already recorded, so only a real name is written; the stored value stands
+  // until a later hook can read one again.
+  const tmuxSession = detectTmuxSession();
+  if (updateEntry(kind, sessionId, (current) => {
+    const updated = mutate(current);
+    return tmuxSession === null ? updated : { ...updated, tmuxSession };
+  })) return true;
 
   const created = buildEntry({
     kind,
@@ -242,6 +251,24 @@ export function abbreviateHome(dir) {
   return dir === home || dir.startsWith(`${home}/`) ? `~${dir.slice(home.length)}` : dir;
 }
 
+/** The current tmux session name, only when the hook is actually inside tmux. */
+export function detectTmuxSession(env = process.env) {
+  if (!env.TMUX || !env.TMUX_PANE) return null;
+  try {
+    const result = spawnSync('tmux', ['display-message', '-p', '-t', env.TMUX_PANE, '#S'], {
+      encoding: 'utf8',
+      env,
+      timeout: 1000,
+    });
+    if (result.status !== 0) return null;
+    const sessionName = result.stdout.trim();
+    if (!sessionName || sessionName.length > 128 || /[\x00-\x1F\x7F]/.test(sessionName)) return null;
+    return sessionName;
+  } catch {
+    return null;
+  }
+}
+
 export function buildEntry({ kind, sessionId, cwd, gitBranch, model, pid }) {
   const now = new Date().toISOString();
   const resolvedPid = pid ?? resolveAgentPid();
@@ -252,6 +279,7 @@ export function buildEntry({ kind, sessionId, cwd, gitBranch, model, pid }) {
     cwd: abbreviateHome(cwd),
     gitBranch: gitBranch ?? null,
     model: model ?? null,
+    tmuxSession: detectTmuxSession(),
     pid: resolvedPid,
     pidStartedAt: processStartedAt(resolvedPid),
     state: 'idle',

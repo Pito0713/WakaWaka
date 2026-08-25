@@ -24,6 +24,7 @@ struct AgentRegistryServiceTests {
         cwd: String = "~/lake-ui-kit",
         gitBranch: String? = "main",
         model: String? = "claude-opus-5",
+        tmuxSession: String? = nil,
         pid: Int32 = ProcessInfo.processInfo.processIdentifier,
         pidStartedAt: Int64? = nil,
         pidStartedAtIsNull: Bool = false,
@@ -49,6 +50,7 @@ struct AgentRegistryServiceTests {
             "\"lastTool\":\(lastTool.map { "\"\($0)\"" } ?? "null")",
             "\"gitBranch\":\(gitBranch.map { "\"\($0)\"" } ?? "null")",
             "\"model\":\(model.map { "\"\($0)\"" } ?? "null")",
+            "\"tmuxSession\":\(jsonString(tmuxSession))",
             "\"skill\":\(skill.map { "\"\($0)\"" } ?? "null")",
             "\"skillSource\":\(skillSource.map { "\"\($0)\"" } ?? "null")",
             "\"startedAt\":\"\(iso.string(from: Date().addingTimeInterval(-3600)))\"",
@@ -58,6 +60,14 @@ struct AgentRegistryServiceTests {
         try "{\(fields.joined(separator: ","))}".write(to: url, atomically: true, encoding: .utf8)
         fields.removeAll()
         return url
+    }
+
+    private func jsonString(_ value: String?) -> String {
+        guard let value,
+              let data = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed),
+              let encoded = String(data: data, encoding: .utf8)
+        else { return "null" }
+        return encoded
     }
 
     private func listing(_ dir: URL) throws -> [URL] {
@@ -373,5 +383,27 @@ struct AgentRegistryServiceTests {
         let row = AgentRegistryService.snapshot(from: try listing(dir), pending: []).rows[0]
         #expect(row.gitBranch!.count <= 24)
         #expect(row.gitBranch!.hasSuffix("…"))
+    }
+
+    @Test func tmuxSessionBuildsOneSanitizedDisplayTitle() throws {
+        let dir = try makeStateDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let unsafeName = "Waka\n" + String(repeating: "x", count: 80)
+        try writeEntry(in: dir, tmuxSession: unsafeName)
+
+        let row = AgentRegistryService.snapshot(from: try listing(dir), pending: []).rows[0]
+        #expect(row.tmuxSession?.contains("\n") == false)
+        #expect(row.tmuxSession?.count == 48)
+        #expect(row.displayTitle == "lake-ui-kit (tmux · \(row.tmuxSession!))")
+    }
+
+    @Test func missingTmuxSessionKeepsTheProjectTitle() throws {
+        let dir = try makeStateDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeEntry(in: dir)
+
+        let row = AgentRegistryService.snapshot(from: try listing(dir), pending: []).rows[0]
+        #expect(row.tmuxSession == nil)
+        #expect(row.displayTitle == "lake-ui-kit")
     }
 }

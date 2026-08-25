@@ -43,6 +43,7 @@ struct AgentRegistryEntry: Decodable {
     let cwd: String
     let gitBranch: String?
     let model: String?
+    let tmuxSession: String?
     let pid: Int32
     let pidStartedAt: Int64?
     let state: String
@@ -72,6 +73,35 @@ struct ActiveAgentRow: Identifiable, Equatable {
     let lastTool: String?
     let state: AgentState
     let heartbeatAt: Date
+
+    init(
+        id: String, kind: AgentKind, pid: Int32, pidStartedAt: Int64?,
+        projectName: String, fullPath: String, gitBranch: String?, model: String?,
+        tmuxSession: String? = nil, skill: String?, skillSource: SkillSource?,
+        lastTool: String?, state: AgentState, heartbeatAt: Date
+    ) {
+        self.id = id
+        self.kind = kind
+        self.pid = pid
+        self.pidStartedAt = pidStartedAt
+        self.projectName = projectName
+        self.fullPath = fullPath
+        self.gitBranch = gitBranch
+        self.model = model
+        self.tmuxSession = tmuxSession
+        self.skill = skill
+        self.skillSource = skillSource
+        self.lastTool = lastTool
+        self.state = state
+        self.heartbeatAt = heartbeatAt
+    }
+
+    let tmuxSession: String?
+
+    var displayTitle: String {
+        guard let tmuxSession else { return projectName }
+        return "\(projectName) (tmux · \(tmuxSession))"
+    }
 }
 
 /// A failure to read must never look like "no agents are running" — a silent

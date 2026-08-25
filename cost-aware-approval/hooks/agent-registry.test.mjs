@@ -25,7 +25,13 @@ function runInRegistry(stateDir, body, env = {}) {
   `;
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
     encoding: 'utf8',
-    env: { ...process.env, WAKAWAKA_STATE_DIR: stateDir, ...env },
+    env: {
+      ...process.env,
+      TMUX: '',
+      TMUX_PANE: '',
+      WAKAWAKA_STATE_DIR: stateDir,
+      ...env,
+    },
   });
   if (r.status !== 0) throw new Error(`child failed: ${r.stderr}`);
   return JSON.parse(r.stdout || 'null');
@@ -50,7 +56,7 @@ test('SessionStart-style entry is written with the documented fields', () => {
       });
       registry.writeEntry(e);
       return registry.readEntry('claude-code', 'sess-1');
-    `);
+    `, { TMUX: '', TMUX_PANE: '' });
 
     assert.equal(entry.schema, 1);
     assert.equal(entry.kind, 'claude-code');
@@ -58,10 +64,82 @@ test('SessionStart-style entry is written with the documented fields', () => {
     assert.equal(entry.cwd, '~/lake-ui-kit', 'home is abbreviated for display');
     assert.equal(entry.gitBranch, 'main');
     assert.equal(entry.model, 'claude-opus-5');
+    assert.equal(entry.tmuxSession, null, 'non-tmux hooks remain backward-compatible');
     assert.equal(entry.state, 'idle');
     assert.ok(entry.pid > 0);
     assert.ok(entry.pidStartedAt > 0, 'pid start time is required for the reuse guard');
     assert.ok(entry.startedAt && entry.heartbeatAt);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('tmux session detection uses an argv call and returns the current session', () => {
+  const { root, stateDir } = tempStateDir();
+  try {
+    const fakeBin = path.join(root, 'bin');
+    fs.mkdirSync(fakeBin);
+    const fakeTmux = path.join(fakeBin, 'tmux');
+    fs.writeFileSync(fakeTmux, '#!/bin/sh\n[ "$1" = display-message ] || exit 9\nprintf WakaWaka\n');
+    fs.chmodSync(fakeTmux, 0o755);
+    const session = runInRegistry(stateDir, 'return registry.detectTmuxSession();', {
+      TMUX: '/tmp/tmux.sock,1,0', TMUX_PANE: '%7', PATH: `${fakeBin}:${process.env.PATH}`,
+    });
+    assert.equal(session, 'WakaWaka');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('tmux session detection rejects absent, harmful, and overlong output', () => {
+  const { root, stateDir } = tempStateDir();
+  try {
+    const fakeBin = path.join(root, 'bin');
+    fs.mkdirSync(fakeBin);
+    const fakeTmux = path.join(fakeBin, 'tmux');
+    fs.writeFileSync(fakeTmux, '#!/bin/sh\nprintf "bad\\tname"\n');
+    fs.chmodSync(fakeTmux, 0o755);
+    const env = { TMUX: '/tmp/tmux.sock,1,0', TMUX_PANE: '%7', PATH: `${fakeBin}:${process.env.PATH}` };
+    const harmful = runInRegistry(stateDir, 'return registry.detectTmuxSession();', env);
+    fs.writeFileSync(fakeTmux, `#!/bin/sh\nprintf '${'x'.repeat(129)}'\n`);
+    const overlong = runInRegistry(stateDir, 'return registry.detectTmuxSession();', env);
+    const absent = runInRegistry(
+      stateDir,
+      'return registry.detectTmuxSession();',
+      { TMUX: '', TMUX_PANE: '' },
+    );
+    assert.deepEqual([harmful, overlong, absent], [null, null, null]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a failed tmux lookup leaves the recorded session name alone', () => {
+  const { root, stateDir } = tempStateDir();
+  try {
+    const fakeBin = path.join(root, 'bin');
+    fs.mkdirSync(fakeBin);
+    const fakeTmux = path.join(fakeBin, 'tmux');
+    const inTmux = { TMUX: '/tmp/tmux.sock,1,0', TMUX_PANE: '%7', PATH: `${fakeBin}:${process.env.PATH}` };
+
+    fs.writeFileSync(fakeTmux, '#!/bin/sh\nprintf WakaWaka\n');
+    fs.chmodSync(fakeTmux, 0o755);
+    const named = runInRegistry(stateDir, `
+      registry.upsertEntry({ session_id: 'in-tmux', cwd: '/tmp/demo' }, () => ({ state: 'working' }));
+      return registry.readEntry('claude-code', 'in-tmux');
+    `, inTmux);
+    assert.equal(named.tmuxSession, 'WakaWaka');
+
+    // The next hook fires while tmux is unreachable. `null` here means "could
+    // not tell", not "not in tmux", so the name must survive it.
+    fs.writeFileSync(fakeTmux, '#!/bin/sh\nexit 1\n');
+    const afterFailure = runInRegistry(stateDir, `
+      registry.upsertEntry({ session_id: 'in-tmux', cwd: '/tmp/demo' }, () => ({ state: 'idle' }));
+      return registry.readEntry('claude-code', 'in-tmux');
+    `, inTmux);
+
+    assert.equal(afterFailure.tmuxSession, 'WakaWaka', 'a lookup failure must not erase the name');
+    assert.equal(afterFailure.state, 'idle', 'the rest of the update still lands');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

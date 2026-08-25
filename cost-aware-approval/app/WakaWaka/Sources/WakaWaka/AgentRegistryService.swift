@@ -213,6 +213,7 @@ enum AgentRegistryService {
             fullPath: sanitize(entry.cwd, limit: 120),
             gitBranch: entry.gitBranch.map { sanitize($0, limit: 24) },
             model: entry.model.map { sanitize(shortModelName($0), limit: 20) },
+            tmuxSession: entry.tmuxSession.flatMap { sanitizedOptional($0, limit: 48) },
             skill: entry.skill.map { sanitize($0, limit: 24) },
             skillSource: entry.skillSource,
             lastTool: entry.lastTool.map { sanitize($0, limit: 20) },
@@ -239,5 +240,10 @@ enum AgentRegistryService {
             .filter { !CharacterSet.controlCharacters.contains($0) }
             .reduce(into: "") { $0.unicodeScalars.append($1) }
         return cleaned.count <= limit ? cleaned : String(cleaned.prefix(limit - 1)) + "…"
+    }
+
+    private static func sanitizedOptional(_ text: String, limit: Int) -> String? {
+        let sanitized = sanitize(text, limit: limit).trimmingCharacters(in: .whitespacesAndNewlines)
+        return sanitized.isEmpty ? nil : sanitized
     }
 }
