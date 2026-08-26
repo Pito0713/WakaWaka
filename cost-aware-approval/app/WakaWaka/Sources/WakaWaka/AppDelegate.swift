@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Server-verified usage via `claude -p "/usage"` (10-minute interval)
     private var usageCommandTimer: Timer?
     private var codexUsageTimer: Timer?
+    private var contextUsageTimer: Timer?
     // agy quota (5-minute interval)
     private var agyQuotaTimer: Timer?
     // Auto-mode expiry sweep (30-second interval)
@@ -63,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startSessionStatusPolling()
         startUsageCommandPolling()
         startCodexUsagePolling()
+        startContextUsagePolling()
         startAgyQuotaPolling()
         startAutoModePolling()
         startP90Detection()
@@ -458,6 +460,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Codex account usage (local session snapshot, 10-minute interval)
+
+    /// Context meters refresh on their own slower clock.
+    ///
+    /// The registry poll next door runs on the **main thread** once a second;
+    /// reading a transcript per row at that rate would put file I/O in front of
+    /// every click. Five seconds is far inside the time a context takes to move
+    /// a percentage point, and the reader skips any file whose size and mtime
+    /// are unchanged, so a quiet session costs one `stat` per pass.
+    private func startContextUsagePolling() {
+        refreshContextUsage()
+        let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            self?.refreshContextUsage()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        contextUsageTimer = timer
+    }
+
+    private func refreshContextUsage() {
+        let rows = viewModel.activeAgents.rows
+        guard !rows.isEmpty else {
+            if !viewModel.contextUsage.isEmpty { viewModel.contextUsage = [:] }
+            return
+        }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let usage = ContextUsageService.usage(for: rows)
+            DispatchQueue.main.async {
+                guard let self, usage != self.viewModel.contextUsage else { return }
+                self.viewModel.contextUsage = usage
+            }
+        }
+    }
 
     private func startCodexUsagePolling() {
         fetchCodexUsage()

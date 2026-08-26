@@ -17,10 +17,35 @@ enum CodexUsageService {
     private struct Payload: Decodable {
         let type: String
         let rateLimits: RateLimits?
+        let info: TokenInfo?
 
         enum CodingKeys: String, CodingKey {
             case type
             case rateLimits = "rate_limits"
+            case info
+        }
+    }
+
+    /// The half of `token_count` this service used to discard. Codex states its
+    /// own context window here, which makes it the one agent whose meter needs
+    /// no externally maintained table.
+    private struct TokenInfo: Decodable {
+        let lastTokenUsage: TurnUsage?
+        let modelContextWindow: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case lastTokenUsage = "last_token_usage"
+            case modelContextWindow = "model_context_window"
+        }
+    }
+
+    private struct TurnUsage: Decodable {
+        /// Total input for that turn, cached portion included — Codex reports
+        /// `cached_input_tokens` as a subset of this, not as an addition to it.
+        let inputTokens: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case inputTokens = "input_tokens"
         }
     }
 
@@ -92,6 +117,33 @@ enum CodexUsageService {
             resetsAt: limit.resetsAt.flatMap { validResetDate($0, relativeTo: fetchedAt) },
             fetchedAt: fetchedAt
         )
+    }
+
+    /// Context occupancy from one `token_count` line, or nil if this is not one.
+    ///
+    /// The last turn's input is what occupied the window; the running total is
+    /// a spend figure and would climb past 100% within an hour of work.
+    static func parseContextUsage(_ line: String) -> ContextUsage? {
+        guard let data = line.data(using: .utf8),
+              data.count <= 1_000_000,
+              let event = try? JSONDecoder().decode(Event.self, from: data),
+              event.type == "event_msg",
+              event.payload.type == "token_count",
+              let info = event.payload.info,
+              let used = info.lastTokenUsage?.inputTokens,
+              let window = info.modelContextWindow else { return nil }
+        return ContextUsage(usedTokens: used, limitTokens: window)
+    }
+
+    /// The newest context reading in a session's own transcript.
+    static func contextUsage(inTranscriptAt url: URL) -> ContextUsage? {
+        // Later lines win: the file is append-only, so the last `token_count`
+        // is the current state of that session.
+        TranscriptTailReader.tailLines(of: url)
+            .reversed()
+            .lazy
+            .compactMap(parseContextUsage)
+            .first
     }
 
     private static func directoryExists(_ url: URL) -> Bool {

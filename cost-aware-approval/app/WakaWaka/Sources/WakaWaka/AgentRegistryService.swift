@@ -214,6 +214,7 @@ enum AgentRegistryService {
             gitBranch: entry.gitBranch.map { sanitize($0, limit: 24) },
             model: entry.model.map { sanitize(shortModelName($0), limit: 20) },
             tmuxSession: entry.tmuxSession.flatMap { sanitizedOptional($0, limit: 48) },
+            transcriptPath: entry.transcriptPath.flatMap(validatedTranscriptPath),
             skill: entry.skill.map { sanitize($0, limit: 24) },
             skillSource: entry.skillSource,
             lastTool: entry.lastTool.map { sanitize($0, limit: 20) },
@@ -240,6 +241,19 @@ enum AgentRegistryService {
             .filter { !CharacterSet.controlCharacters.contains($0) }
             .reduce(into: "") { $0.unicodeScalars.append($1) }
         return cleaned.count <= limit ? cleaned : String(cleaned.prefix(limit - 1)) + "…"
+    }
+
+    /// The only registry value the app opens rather than draws, so it is
+    /// checked again here: the hook already validates it, but a registry file
+    /// is an ordinary file on disk that anything on this machine can write.
+    /// Truncating or cleaning it would be wrong — a path that is not exactly
+    /// what was recorded is not the transcript, so a suspect value is dropped.
+    static func validatedTranscriptPath(_ path: String) -> String? {
+        guard path.hasPrefix("/"), path.count <= 512,
+              !path.contains("/../"), !path.hasSuffix("/.."),
+              path.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
+              path.contains("/.claude/") || path.contains("/.codex/") else { return nil }
+        return path
     }
 
     private static func sanitizedOptional(_ text: String, limit: Int) -> String? {

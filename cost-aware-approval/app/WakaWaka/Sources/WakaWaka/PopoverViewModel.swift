@@ -31,6 +31,9 @@ final class PopoverViewModel: ObservableObject {
     @Published var activeAgents: ActiveAgentsSnapshot = .empty
     /// True while a forced re-verification is in flight (it shells out).
     @Published var isRefreshingAgents: Bool = false
+    /// How full each visible agent's context window is, keyed by row id.
+    /// A missing key means no denominator was available, not zero usage.
+    @Published var contextUsage: [String: ContextUsage] = [:]
     /// Why the last click could not reach a window; nil when it worked.
     @Published var agentFocusError: String? = nil
     /// Mirrors the persisted flag so the footer never guesses controller state.

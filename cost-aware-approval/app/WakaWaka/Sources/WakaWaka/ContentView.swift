@@ -69,6 +69,7 @@ struct ContentView: View {
                     model.onToggleFloatingPanel(isVisible)
                 },
                 isFloatingPanelVisible: model.isFloatingPanelVisible,
+                contextUsage: model.contextUsage,
                 focusError: model.agentFocusError
             )
         }

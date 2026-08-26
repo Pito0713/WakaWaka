@@ -44,6 +44,7 @@ struct AgentRegistryEntry: Decodable {
     let gitBranch: String?
     let model: String?
     let tmuxSession: String?
+    let transcriptPath: String?
     let pid: Int32
     let pidStartedAt: Int64?
     let state: String
@@ -77,7 +78,8 @@ struct ActiveAgentRow: Identifiable, Equatable {
     init(
         id: String, kind: AgentKind, pid: Int32, pidStartedAt: Int64?,
         projectName: String, fullPath: String, gitBranch: String?, model: String?,
-        tmuxSession: String? = nil, skill: String?, skillSource: SkillSource?,
+        tmuxSession: String? = nil, transcriptPath: String? = nil,
+        skill: String?, skillSource: SkillSource?,
         lastTool: String?, state: AgentState, heartbeatAt: Date
     ) {
         self.id = id
@@ -89,6 +91,7 @@ struct ActiveAgentRow: Identifiable, Equatable {
         self.gitBranch = gitBranch
         self.model = model
         self.tmuxSession = tmuxSession
+        self.transcriptPath = transcriptPath
         self.skill = skill
         self.skillSource = skillSource
         self.lastTool = lastTool
@@ -97,6 +100,10 @@ struct ActiveAgentRow: Identifiable, Equatable {
     }
 
     let tmuxSession: String?
+
+    /// The agent's own transcript, when the hook recorded one. Opened, never
+    /// displayed — which is why it is validated rather than sanitised.
+    let transcriptPath: String?
 
     var displayTitle: String {
         guard let tmuxSession else { return projectName }

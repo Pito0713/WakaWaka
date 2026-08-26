@@ -150,9 +150,12 @@ export function upsertEntry(payload, mutate) {
   // already recorded, so only a real name is written; the stored value stands
   // until a later hook can read one again.
   const tmuxSession = detectTmuxSession();
+  const transcriptPath = detectTranscriptPath(payload);
   if (updateEntry(kind, sessionId, (current) => {
     const updated = mutate(current);
-    return tmuxSession === null ? updated : { ...updated, tmuxSession };
+    if (tmuxSession !== null) updated.tmuxSession = tmuxSession;
+    if (transcriptPath !== null) updated.transcriptPath = transcriptPath;
+    return updated;
   })) return true;
 
   const created = buildEntry({
@@ -161,6 +164,7 @@ export function upsertEntry(payload, mutate) {
     cwd: payload.cwd ?? process.cwd(),
     gitBranch: payload.gitBranch ?? null,
     model: payload.model ?? null,
+    transcriptPath,
   });
   return writeEntry({ ...created, ...mutate(created) });
 }
@@ -269,7 +273,7 @@ export function detectTmuxSession(env = process.env) {
   }
 }
 
-export function buildEntry({ kind, sessionId, cwd, gitBranch, model, pid }) {
+export function buildEntry({ kind, sessionId, cwd, gitBranch, model, pid, transcriptPath }) {
   const now = new Date().toISOString();
   const resolvedPid = pid ?? resolveAgentPid();
   return {
@@ -280,6 +284,7 @@ export function buildEntry({ kind, sessionId, cwd, gitBranch, model, pid }) {
     gitBranch: gitBranch ?? null,
     model: model ?? null,
     tmuxSession: detectTmuxSession(),
+    transcriptPath: transcriptPath ?? null,
     pid: resolvedPid,
     pidStartedAt: processStartedAt(resolvedPid),
     state: 'idle',
@@ -334,6 +339,28 @@ export function detectKind(payload, env = process.env) {
 
   // Last and weakest: a session id alone says only that some agent is running.
   return typeof payload.session_id === 'string' ? 'claude-code' : null;
+}
+
+/**
+ * The agent's own transcript file, when the payload names one we recognise.
+ *
+ * Stored so the app never has to reconstruct the path itself. Claude Code
+ * derives it from the cwd through a slug rule that belongs to Claude Code, and
+ * a rule copied here would keep working right up until the day it changed —
+ * then fail as "file not found", which looks exactly like "no data yet".
+ *
+ * This is the one registry value the app opens rather than displays, so the
+ * check is stricter than the display fields: absolute, no control characters,
+ * bounded, and under one of the two roots a transcript can legitimately live.
+ */
+export function detectTranscriptPath(payload) {
+  const path = payload?.transcript_path ?? payload?.transcriptPath;
+  if (typeof path !== 'string') return null;
+  if (!path.startsWith('/') || path.length > 512) return null;
+  if (/[\x00-\x1F\x7F]/.test(path)) return null;
+  // `..` cannot climb out of a root that is only ever checked as a substring.
+  if (path.includes('/../') || path.endsWith('/..')) return null;
+  return kindFromTranscriptPath(path) ? path : null;
 }
 
 /** `~/.codex/sessions/…` or `~/.claude/projects/…` — whose transcript is this. */

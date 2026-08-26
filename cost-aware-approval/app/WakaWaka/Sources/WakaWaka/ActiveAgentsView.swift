@@ -23,6 +23,9 @@ struct ActiveAgentsView: View {
     /// the footer because what it detaches is this section, not the popover.
     var onToggleFloatingPanel: (Bool) -> Void = { _ in }
     var isFloatingPanelVisible: Bool = false
+    /// Context occupancy per row id. Absent means "no denominator" and the
+    /// row draws no meter — an empty bar would read as an empty context.
+    var contextUsage: [String: ContextUsage] = [:]
     /// Why the last click did not reach a window. Shown rather than swallowed:
     /// a click that silently does nothing reads as a broken panel.
     var focusError: String? = nil
@@ -35,7 +38,9 @@ struct ActiveAgentsView: View {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 ForEach(snapshot.rows.prefix(AgentRegistryService.maxRows)) { row in
-                    AgentRow(row: row, onFocus: { onFocus(row) })
+                    AgentRow(row: row,
+                             contextUsage: contextUsage[row.id],
+                             onFocus: { onFocus(row) })
                 }
                 if snapshot.rows.count > AgentRegistryService.maxRows {
                     overflowNote(snapshot.rows.count - AgentRegistryService.maxRows)
@@ -144,6 +149,7 @@ struct ActiveAgentsView: View {
 /// One agent: project and branch on top, what it is doing underneath.
 private struct AgentRow: View {
     let row: ActiveAgentRow
+    let contextUsage: ContextUsage?
     let onFocus: () -> Void
 
     @State private var isHovering = false
@@ -176,6 +182,9 @@ private struct AgentRow: View {
             HStack(spacing: 6) {
                 detail
                 Spacer()
+                if let contextUsage {
+                    ContextMeter(usage: contextUsage)
+                }
                 Text(relativeHeartbeat)
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)

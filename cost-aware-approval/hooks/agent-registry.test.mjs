@@ -145,6 +145,56 @@ test('a failed tmux lookup leaves the recorded session name alone', () => {
   }
 });
 
+test('a transcript path is kept only when it is one the app may open', () => {
+  const { root, stateDir } = tempStateDir();
+  try {
+    const check = (path) => runInRegistry(
+      stateDir,
+      `return registry.detectTranscriptPath(${JSON.stringify({ transcript_path: path })});`,
+    );
+
+    assert.equal(check('/tmp/agent-home/.claude/projects/-tmp-agent-home-repo/sess.jsonl'),
+                 '/tmp/agent-home/.claude/projects/-tmp-agent-home-repo/sess.jsonl');
+    assert.equal(check('/tmp/agent-home/.codex/sessions/2026/08/25/rollout-x.jsonl'),
+                 '/tmp/agent-home/.codex/sessions/2026/08/25/rollout-x.jsonl');
+
+    assert.equal(check('~/.claude/projects/sess.jsonl'), null, 'must be absolute — the app opens it');
+    assert.equal(check('/tmp/agent-home/.claude/../../etc/passwd'), null, 'a root checked by substring must not be climbable');
+    assert.equal(check('/tmp/agent-home/.claude/a\nb.jsonl'), null);
+    assert.equal(check(`/tmp/agent-home/.claude/${'x'.repeat(520)}`), null);
+    assert.equal(check('/tmp/agent-home/Documents/notes.jsonl'), null, 'not a transcript root we recognise');
+    assert.equal(check(42), null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a payload without a transcript path leaves the recorded one alone', () => {
+  const { root, stateDir } = tempStateDir();
+  try {
+    const transcript = '/tmp/agent-home/.claude/projects/-tmp-agent-home-repo/known.jsonl';
+    const stored = runInRegistry(stateDir, `
+      registry.upsertEntry(
+        { session_id: 'known', cwd: '/tmp/demo', transcript_path: ${JSON.stringify(transcript)} },
+        () => ({ state: 'working' }),
+      );
+      return registry.readEntry('claude-code', 'known');
+    `);
+    assert.equal(stored.transcriptPath, transcript);
+
+    // `Stop` and friends carry no transcript_path; that is not evidence the
+    // session lost its transcript.
+    const after = runInRegistry(stateDir, `
+      registry.upsertEntry({ session_id: 'known', cwd: '/tmp/demo' }, () => ({ state: 'idle' }));
+      return registry.readEntry('claude-code', 'known');
+    `);
+    assert.equal(after.transcriptPath, transcript, 'an absent path must not erase a recorded one');
+    assert.equal(after.state, 'idle');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('the registry file is created 0600 — it names projects and branches', () => {
   const { root, stateDir } = tempStateDir();
   try {
