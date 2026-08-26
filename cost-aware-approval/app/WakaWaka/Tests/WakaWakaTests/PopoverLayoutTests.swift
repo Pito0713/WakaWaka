@@ -35,6 +35,34 @@ struct PopoverLayoutTests {
         return NSHostingView(rootView: probe).fittingSize.height
     }
 
+    private func agentsHeight(_ snapshot: ActiveAgentsSnapshot,
+                              contextUsage: [String: ContextUsage]) -> CGFloat {
+        let probe = VStack(alignment: .leading, spacing: 0) {
+            ActiveAgentsView(snapshot: snapshot, contextUsage: contextUsage)
+        }
+        .frame(width: 480)
+        return NSHostingView(rootView: probe).fittingSize.height
+    }
+
+    /// The critical band adds a line of explanation to a row. A line that
+    /// changes the layout without changing the measurement is precisely the
+    /// defect this file exists to catch — it shipped twice before.
+    @Test func theCriticalWarningLineIsMeasured() throws {
+        let snapshot = ActiveAgentsSnapshot(rows: [row("alpha")], status: .ok)
+        let id = try #require(snapshot.rows.first?.id)
+
+        let calm = try #require(ContextUsage(usedTokens: 400_000, limitTokens: 1_000_000))
+        let full = try #require(ContextUsage(usedTokens: 910_000, limitTokens: 1_000_000))
+        #expect(calm.band == .normal && full.band == .critical)
+
+        let plain = agentsHeight(snapshot, contextUsage: [:])
+        let metered = agentsHeight(snapshot, contextUsage: [id: calm])
+        let warned = agentsHeight(snapshot, contextUsage: [id: full])
+
+        #expect(metered == plain, "a meter rides inside a row that already exists")
+        #expect(warned > metered, "the warning line adds height and must be measured")
+    }
+
     private func row(_ name: String) -> ActiveAgentRow {
         ActiveAgentRow(
             id: "claude-code:\(name)", kind: .claudeCode, pid: 1, pidStartedAt: nil,

@@ -68,6 +68,24 @@ struct FloatingPanelSizingTests {
         #expect(heightWithError > heightWithoutError)
     }
 
+    /// The HUD shows no warning text, so a meter must not change its height —
+    /// it sits inline in a row that already exists. Pinned because the opposite
+    /// mistake (a line that grows the panel without being measured) is the one
+    /// this file was written for.
+    @Test func aMeterDoesNotChangeTheHUDsHeight() {
+        let active = snapshot(agentCount: 2)
+        let plain = model(snapshot: active)
+        let metered = model(snapshot: active)
+        metered.contextUsage = Dictionary(uniqueKeysWithValues: active.rows.map {
+            ($0.id, ContextUsage(usedTokens: 910_000, limitTokens: 1_000_000)!)
+        })
+
+        #expect(FloatingPanelSizing.contentSize(model: metered).height
+                == FloatingPanelSizing.contentSize(model: plain).height)
+        #expect(FloatingPanelSizing.contentSize(model: metered).width
+                == FloatingPanelSizing.contentSize(model: plain).width)
+    }
+
     private func contentSize(snapshot: ActiveAgentsSnapshot) -> NSSize {
         FloatingPanelSizing.contentSize(model: model(snapshot: snapshot))
     }

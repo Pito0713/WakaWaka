@@ -190,6 +190,15 @@ private struct AgentRow: View {
                     .foregroundStyle(.tertiary)
             }
             .padding(.leading, 13)
+
+            // Lives inside the row rather than beside it, so the popover's
+            // measurement picks it up the same way it picks up any other line.
+            if contextUsage?.band == .critical, let warning = contextUsage?.warningLine {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .padding(.leading, 13)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
@@ -240,6 +249,7 @@ private struct AgentRow: View {
     private var tooltip: String {
         var parts = ["\(row.kind.displayName) · \(stateText)", row.fullPath]
         if let model = row.model { parts.append("模型：\(model)") }
+        if let contextUsage { parts.append(contextUsage.tooltipLine) }
         if let skill = row.skill {
             let source = row.skillSource?.explanation ?? "skill"
             parts.append("Skill：\(skill)（\(source)）")

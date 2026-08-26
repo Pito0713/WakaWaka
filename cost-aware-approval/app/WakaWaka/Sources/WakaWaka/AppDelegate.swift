@@ -488,6 +488,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 guard let self, usage != self.viewModel.contextUsage else { return }
                 self.viewModel.contextUsage = usage
+                self.floatingPanelController?.update(contextUsage: usage)
+                // Crossing into the critical band adds a line to a row, so the
+                // popover has to be remeasured — setting it without resizing
+                // would clip the very warning that exists to be read. This is
+                // the same failure the focus-error line was fixed for.
+                self.updatePopoverHeight()
             }
         }
     }

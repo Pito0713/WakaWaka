@@ -38,6 +38,19 @@ struct ContextUsage: Equatable {
     }
 }
 
+extension ContextUsage {
+    /// Spelled out so the percentage on the row can be checked rather than
+    /// trusted — the denominator is the part a stale table gets wrong.
+    var tooltipLine: String {
+        "上下文 \(usedTokens.formatted()) / \(limitTokens.formatted())（\(percent)%）"
+    }
+
+    /// Shown only in the critical band, where the meter alone is easy to miss.
+    var warningLine: String {
+        "上下文 \(percent)% 快滿了，建議收尾或壓縮對話"
+    }
+}
+
 /// Which warning band a context sits in.
 enum ContextBand: Equatable {
     case normal

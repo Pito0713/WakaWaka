@@ -122,6 +122,11 @@ final class FloatingAgentsPanelController: NSWindowController {
         resize()
     }
 
+    func update(contextUsage: [String: ContextUsage]) {
+        model.contextUsage = contextUsage
+        resize()
+    }
+
     func setOpacity(_ opacity: Double) {
         model.baseOpacity = opacity
         preferences.opacity = opacity

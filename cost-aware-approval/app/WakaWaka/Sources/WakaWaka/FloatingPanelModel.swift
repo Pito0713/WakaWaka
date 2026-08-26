@@ -6,6 +6,8 @@ final class FloatingPanelModel: ObservableObject {
     @Published var snapshot: ActiveAgentsSnapshot
     @Published var baseOpacity: Double
     @Published var focusError: String?
+    /// Keyed by row id; a missing key means no denominator, not zero.
+    @Published var contextUsage: [String: ContextUsage] = [:]
 
     init(
         snapshot: ActiveAgentsSnapshot,

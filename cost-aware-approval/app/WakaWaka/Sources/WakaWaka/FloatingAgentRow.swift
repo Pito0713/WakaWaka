@@ -4,6 +4,8 @@ import SwiftUI
 /// intentionally stop publishing while an idle agent remains otherwise unchanged.
 struct FloatingAgentRow: View {
     let row: ActiveAgentRow
+    /// Nil draws no meter: 300pt has no room to explain an empty bar.
+    let contextUsage: ContextUsage?
     let onFocus: () -> Void
 
     @State private var isHovering = false
@@ -38,6 +40,9 @@ struct FloatingAgentRow: View {
             HStack(spacing: 6) {
                 detail
                 Spacer(minLength: 8)
+                if let contextUsage {
+                    ContextMeter(usage: contextUsage)
+                }
                 relativeHeartbeat
             }
             .padding(.leading, 14)
@@ -103,6 +108,12 @@ struct FloatingAgentRow: View {
     private var tooltip: String {
         var parts = ["\(row.kind.displayName) · \(stateText)", row.fullPath]
         if let model = row.model { parts.append("模型：\(model)") }
+        if let contextUsage { parts.append(contextUsage.tooltipLine) }
+        // The HUD has no room for the warning line the popover shows, so the
+        // colour is the only signal on screen — it must be spelled out here.
+        if contextUsage?.band == .critical, let warning = contextUsage?.warningLine {
+            parts.append(warning)
+        }
         if let skill = row.skill {
             let source = row.skillSource?.explanation ?? "skill"
             parts.append("Skill：\(skill)（\(source)）")

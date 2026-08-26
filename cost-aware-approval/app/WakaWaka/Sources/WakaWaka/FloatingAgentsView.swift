@@ -58,7 +58,8 @@ struct FloatingAgentsView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             ForEach(model.snapshot.rows.prefix(AgentRegistryService.maxRows)) { row in
-                FloatingAgentRow(row: row) { onFocus(row) }
+                FloatingAgentRow(row: row,
+                                 contextUsage: model.contextUsage[row.id]) { onFocus(row) }
             }
             if model.snapshot.rows.count > AgentRegistryService.maxRows {
                 Text("另有 \(model.snapshot.rows.count - AgentRegistryService.maxRows) 個")
