@@ -15,18 +15,18 @@ enum ContextWindows {
     private static let table: [String: Int] = load()
 
     static func window(forModel model: String?) -> Int? {
-        guard let model else { return nil }
-        if let exact = table[model] { return exact }
-        // Rows carry the shortened name the panel displays ("opus-5"), while the
-        // table is keyed by the full id. Transcripts give the full id, so this
-        // only matters when falling back to the registry's own value.
-        return table["claude-\(model)"]
+        window(forModel: model, in: table)
     }
 
-    /// Test seam: the table is read once from disk, so a case that wants to
-    /// exercise the lookup rules supplies its own.
+    /// The lookup rule itself, over a supplied table so tests can exercise it
+    /// without the file. The shipped path above delegates here rather than
+    /// repeating the rule: two copies of a rule are two rules, and the tested
+    /// one would not have been the one that runs.
     static func window(forModel model: String?, in table: [String: Int]) -> Int? {
         guard let model else { return nil }
+        // Rows carry the shortened name the panel displays ("opus-5") while the
+        // table is keyed by the full id. Transcripts give the full id, so this
+        // only matters when falling back to the registry's own value.
         return table[model] ?? table["claude-\(model)"]
     }
 
