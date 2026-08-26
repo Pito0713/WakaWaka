@@ -1,6 +1,6 @@
 # 計劃書：每日 Token 用量儀表板（Usage Dashboard）
 
-> 狀態：**已定案，待實作**（決策見 §10）
+> 狀態：**已實作並驗收**（決策見 §10）
 > 對象：WakaWaka menu bar app（`cost-aware-approval/app/WakaWaka`）
 > 建立：2026-07-24
 

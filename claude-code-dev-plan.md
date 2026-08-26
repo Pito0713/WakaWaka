@@ -1,5 +1,7 @@
 # Claude Code 開發流程計劃書：Cost-Aware Approval MVP
 
+> 狀態：**已實作並驗收**
+
 ## 摘要
 本文件是給 Claude Code 執行開發用的工作指引，對應 v2 計劃的 Phase 1-3（MVP）。三個子系統各自獨立、低耦合，建議**依序**請 Claude Code 開發並驗收，不要一次性丟整個計劃，避免單次任務範圍過大導致品質下降。
 

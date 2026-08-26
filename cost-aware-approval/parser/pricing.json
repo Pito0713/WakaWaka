@@ -1,5 +1,5 @@
 {
-  "pricingAsOf": "2026-08-12",
+  "pricingAsOf": "2026-08-25",
   "_note": "標準 API list price（USD / MTok）估算，非實際帳單。訂閱制下請視為等值估算。不含 fast mode、長 context 加價、Batch API 折扣。",
   "claude": {
     "_source": "Anthropic 官方模型與定價表（platform.claude.com/docs/en/about-claude/models/overview、/docs/en/pricing），經 claude-api skill 快取於 2026-06-24 核對。",
@@ -88,12 +88,12 @@
     }
   },
   "codex": {
-    "_note": "GPT-5.6 Sol Standard API 每 MTok 基礎價格。來源：https://developers.openai.com/api/docs/models/gpt-5.6-sol（查證於 2026-07-27）。cachedInputPerMTok 對應 Codex 的 cached_input_tokens；cache write 為 uncached input 的 1.25 倍。超過 272K input tokens 的 request 另有長 context 加價，現有每日聚合估算未逐 request 套用。",
-    "_date": "2026-07-27",
+    "_note": "GPT-5.6 Sol 促銷 API 價格（至少至 2026-11-21），單位 USD / MTok。來源：https://developers.openai.com/api/docs/models/gpt-5.6-sol（查證於 2026-08-25）。cachedInputPerMTok 對應 Codex 的 cached_input_tokens；cache write 為 uncached input 的 1.25 倍。超過 272K input tokens 的 request 另有 input 2x / output 1.5x 長 context 加價，現有每日聚合估算未逐 request 套用。",
+    "_date": "2026-08-25",
     "model": "gpt-5.6-sol",
-    "inputPerMTok": 5.0,
-    "cachedInputPerMTok": 0.5,
-    "outputPerMTok": 30.0,
-    "cacheCreationPerMTok": 6.25
+    "inputPerMTok": 4.0,
+    "cachedInputPerMTok": 0.4,
+    "outputPerMTok": 20.0,
+    "cacheCreationPerMTok": 5.0
   }
 }

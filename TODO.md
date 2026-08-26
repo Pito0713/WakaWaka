@@ -4,16 +4,6 @@
 
 ---
 
-## Menu bar icon — 停用中 / 待重啟的狀態
-
-- [ ] **Urgent（快到期）狀態** — 已實作但 dormant
-  - 現況：`IconUrgencyOverlay.swift` 已寫好（紅色疊色 + 呼吸脈動、尊重 Reduce Motion），但 `setIcon` **目前沒有呼叫** `urgencyOverlay.update()` → urgent 看起來跟一般 pending 一樣。
-  - 資料源：`pendingQueue` 各項的 `hookUrgent`（hook 等 8 分鐘後轉 true，約 2 分鐘後自動拒絕）。
-  - 復活方式：在 `setIcon` 末尾加回 `urgencyOverlay?.update(silhouette: image, urgency: ...)`；`IconUrgencyOverlay.urgency(pendingCount:hasUrgent:)` 已備。
-  - 待決定：urgent 的視覺語言要用什麼（再換一色？加速掃描？脈動？）→ 待新需求。
-
----
-
 ## Popover（點小精靈開啟的面板）
 
 > 現況紀錄，之後可能要調整或新增狀態。實作在 `ContentView.swift` + `PopoverViewModel.swift`，事件接線在 `AppDelegate`。
@@ -32,6 +22,7 @@
 
 ## 已移除（歷史紀錄，避免重做）
 
+- ~~Urgent 紅色呼吸 menu bar 圖示~~（2026-08-25 決定不啟用；8 分鐘警告、popover 紅色倒數、系統通知與 9m50s 自動拒絕仍保留）
 - ~~T2 token% 水位填充~~（覺得不美觀 → 移除 `IconFillMeter.swift`）
 - ~~T3 CPU 負載反轉 + `CPUMonitor.swift`~~（要求移除，腳擺回固定速度）
 - ~~藍色 frightened 臉當 pending~~（改成**黃色 Blinky + 眼睛掃描**）

@@ -1,6 +1,6 @@
 # 計劃書：Token 活動分佈報表（Phase Usage）
 
-> 狀態：**v2 定案 — 已納入 Codex 對抗式評估，範圍已拍板，待實作**
+> 狀態：**v2 — 已實作並驗收**
 > 對象：WakaWaka 用量儀表板（`cost-aware-approval/app/WakaWaka` + `cost-aware-approval/parser`）
 > 建立 2026-08-08 ｜ v2 修訂 2026-08-08 ｜ 範圍拍板與執行指南 2026-08-10
 

@@ -1,6 +1,6 @@
 # WakaWaka — Cost-Aware Approval for AI Coding Agents
 
-> macOS menubar 守門員：攔截 Claude Code、Codex 與 agy（Antigravity CLI）的工具呼叫，顯示用量、評估操作風險，並讓你決定放行或拒絕。
+> macOS menubar 守門員：攔截 Claude Code 與 Codex 的工具呼叫，顯示用量、評估操作風險，並讓你決定放行或拒絕。
 
 ---
 
@@ -11,7 +11,7 @@ AI coding agent 會代表使用者呼叫 shell、修改檔案或連接外部服�
 1. **成本失控**：你不知道目前 rolling window 還剩多少用量，也不知道這次操作會消耗多少額度
 2. **操作失控**：高風險指令（`sudo`、`git push --force`、`rm -rf`）會在你不注意時悄悄執行
 
-WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依風險分類後自動放行、立即拒絕或路由到 macOS menubar app 進行人工審批。App 同時整合 Claude Code、Codex 與 agy 的可用量資訊。
+WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依風險分類後自動放行、立即拒絕或路由到 macOS menubar app 進行人工審批。目前已接通 Claude Code 與 Codex；agy hook 尚未接通，因此不列為支援中的審批來源。
 
 ### 核心功能
 
@@ -21,9 +21,8 @@ WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依�
 | **懸浮 Agent HUD**   | 把上面那份清單拉出 popover：常駐置頂、不搶焦點的小視窗，不必點 menu bar 就知道誰在跑、誰卡住。`NSPanel` + `.nonactivatingPanel`，點一列直接跳該 agent 的終端機而不會先把焦點搶過來；位置與可見狀態記在偏好設定 |
 | **三層風險分類**     | CRITICAL → HIGH → MEDIUM；各 agent adapter 採 fail-closed 策略，Codex 的 CRITICAL shell 操作會立即拒絕 |
 | **Auto 模式**        | per-agent 開關；開啟後自動放行白名單 MEDIUM（Edit/Write/MultiEdit + 未知 bash），HIGH/CRITICAL 與 MCP 仍彈窗；30 分鐘 TTL + fail-closed 稽核（`~/.wakawaka/auto-audit.jsonl`） |
-| **多代理支援**       | 同時守護 Claude Code、Codex 與 agy，agent badge 顯示工具呼叫來源                                         |
+| **多代理支援**       | 同時守護 Claude Code 與 Codex，agent badge 顯示工具呼叫來源                                               |
 | **Codex Usage**      | 從本機 Codex session 資料彙整 5h 與 weekly 用量，獨立於 Claude Code usage 顯示                            |
-| **agy Quota Bar**    | 每個 agy 審批卡片即時顯示 Gemini quota 用量（%）與重置倒數（↻ Xh Xm），從 agy local language server 取得 |
 | **Token 用量追蹤**   | 從 `~/.claude/projects/` JSONL 解析，全域合併去重，誤差 < 3%                                             |
 | **Server 驗證用量**  | `claude -p "/usage"` 每 10 分鐘校正一次，進度條旁綠點表示資料已驗證                                      |
 | **5h 配額進度條**    | 對應 Claude 實際 rate limit 窗口，含重置倒數計時                                                         |
@@ -57,13 +56,6 @@ WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依�
 │                    ~/.wakawaka/state/                        │
 └──────────────────────────────────────────────────────────────┘
                                         │
-┌──────────────────────────────────────────────────────────────┐
-│                      agy（使用者端）                          │
-│  Gemini AI ──tool call──► pretooluse-agy.mjs                │
-│                              │ write pending_<sid>.json      │
-│                              ▼  agent: "agy"                 │
-│                    ~/.wakawaka/state/  ◄──────────────────   │
-└──────────────────────────────────────────────────────────────┘
                                         │ poll decision_<sid>
                                         ▼
 ┌──────────────────────────────────────────────────────────────┐
@@ -99,7 +91,6 @@ cost-aware-approval/
 ├── hooks/
 │   ├── pretooluse.mjs          # Claude Code PreToolUse hook（順帶寫 agent 心跳）
 │   ├── pretooluse-codex.mjs    # Codex PreToolUse adapter
-│   ├── pretooluse-agy.mjs      # agy (Antigravity CLI) PreToolUse hook
 │   ├── agent-registry.mjs      # active-agents registry 共用模組（原子寫入、pid 解析）
 │   ├── sessionstart.mjs        # session 開始 → 建立 registry 檔
 │   ├── userpromptsubmit.mjs    # 使用者送出 → working（並記錄 slash command 名稱）
@@ -133,7 +124,6 @@ cost-aware-approval/
         ├── ParserRunner.swift      # npx tsx bridge + claude /usage 呼叫
         └── Models.swift            # PendingData、UsageOutput、ClaudeUsageInfo、P90Result
 
-~/.gemini/config/hooks.json         # agy 全局 hook 配置（指向 pretooluse-agy.mjs）
 ~/.claude/settings.json             # Claude Code hook 配置（PreToolUse + 4 個 lifecycle）
 .codex/hooks.json                   # Codex 專案 hook 配置（指向 pretooluse-codex.mjs）
 ```
@@ -314,9 +304,9 @@ Codex 的安全 read command 僅限無 pipe、redirect、command substitution �
 
 > Coverage 限制：此 hook 是本機 Codex tool path 的審批層，不應視為完整 sandbox。Hosted tools 或平台明確不送入 `PreToolUse` 的 specialized path，不在這個 adapter 的攔截範圍內。
 
-### Claude Code 與 agy
+### Claude Code
 
-Claude Code 與 agy 使用相同三層名稱，但 adapter 的最終處置可能不同；例如部分 CRITICAL 操作會保留人工最終決定。修改政策時應同步更新各 hook 的 regression tests，不要從 Codex 表格推論其他 agent 的行為。
+Claude Code 使用相同三層名稱，但 adapter 的最終處置可能與 Codex 不同；例如部分 CRITICAL 操作會保留人工最終決定。修改政策時應同步更新 hook 的 regression tests，不要從 Codex 表格推論 Claude Code 的行為。
 
 ---
 
@@ -659,7 +649,7 @@ Active Agents 面板可互動：點一列切到該 agent 的終端機，旁邊�
 
 #### 已知限制
 
-- **Codex 成本待補**：`pricing.json` 尚未填入 Codex 價格，成本模式下 Codex 顯示「—」而非估算值（Token 模式正常顯示）
+- ~~**Codex 成本待補**~~：已於 2026-08-25 補入 GPT-5.6 Sol 官方促銷 API 費率；儀表板顯示等值 API 成本估算，不代表訂閱帳單
 - **agy 未納入**：agy 本地 API 只提供剩餘額度 %，無 token 數據可聚合
 
 ---

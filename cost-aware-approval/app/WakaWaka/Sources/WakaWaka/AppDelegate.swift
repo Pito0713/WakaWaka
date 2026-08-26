@@ -98,8 +98,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         l.actions = ["contents": NSNull(), "opacity": NSNull(), "bounds": NSNull(), "position": NSNull(), "frame": NSNull()]
         statusItem.button?.layer?.addSublayer(l)
         iconLayer = l
-        // Overlay lives on top of the icon art.
-        urgencyOverlay = IconUrgencyOverlay(host: l)
         statusItem.button?.action = #selector(togglePopover)
         statusItem.button?.target = self
         setIcon(hasPending: false)
@@ -207,10 +205,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var lastIconImage: NSImage?   // skip redundant status-button updates
     private var iconLayer: CALayer?            // hosts the icon; swapped via `contents` (off the button.image path)
     private var lastLength: CGFloat = -1        // last status-item width we set
-
-    // Data-reactive icon overlay (sublayer of iconLayer). Parked/dormant until the
-    // urgent state gets a fresh spec — kept wired so it's a one-line re-enable.
-    private var urgencyOverlay: IconUrgencyOverlay?
 
     // Feet-wave frame swap. Swaps via `iconLayer.contents` (not `button.image`), so
     // it no longer hits the recompositing path that used to flash white.

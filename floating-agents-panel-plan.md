@@ -1,6 +1,6 @@
 # 計劃書：懸浮 Active Agents HUD
 
-> 狀態：**v2 — Phase 0–2 已實作，Phase 3 部分完成**（分支 `feat/floating-agents-panel`）
+> 狀態：**v2 — 已實作並完成 GUI 驗收**（Urgent skin 整合取消，見 §6）
 > 對象：WakaWaka menu bar app（`cost-aware-approval/app/WakaWaka`）
 > 建立 2026-08-18 ｜ v2 於同日回填實作結果
 > 前置：`active-agents-plan.md` v3（heartbeat registry）已實作完成

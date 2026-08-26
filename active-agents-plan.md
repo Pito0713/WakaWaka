@@ -1,6 +1,6 @@
 # 計劃書：Popover 活躍 Agent 與 Skill 面板
 
-> 狀態：**v3 — 架構定案（heartbeat registry），待實作**
+> 狀態：**v3 — 已實作並驗收**
 > 對象：WakaWaka menu bar app（`cost-aware-approval/app/WakaWaka`）
 > 建立 2026-08-08 ｜ v2 納入 Codex 對抗式評估 ｜ v3 改採 heartbeat 架構
 
