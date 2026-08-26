@@ -101,6 +101,88 @@ struct CodexContextParsingTests {
     }
 }
 
+struct ClaudeTranscriptTests {
+    /// Shape captured from a real ~/.claude/projects/**/<session>.jsonl, with
+    /// the numbers measured on 2026-08-25.
+    private func assistant(input: Int, cacheRead: Int, cacheWrite: Int = 0,
+                           model: String = "claude-opus-5", sidechain: Bool = false) -> String {
+        """
+        {"type":"assistant","isSidechain":\(sidechain),"sessionId":"s1",        "message":{"model":"\(model)","usage":{"input_tokens":\(input),        "cache_creation_input_tokens":\(cacheWrite),"cache_read_input_tokens":\(cacheRead),        "output_tokens":1017}}}
+        """
+    }
+
+    /// Cached tokens are a tenth of the price but occupy the window in full.
+    /// Counting only uncached input reports this 229K context as 2 tokens.
+    @Test func cachedTokensStillOccupyTheWindow() throws {
+        let turn = try #require(ClaudeTranscriptReader.parseTurn(
+            assistant(input: 2, cacheRead: 228_495, cacheWrite: 492)))
+        #expect(turn.contextTokens == 228_989)
+        #expect(turn.model == "claude-opus-5")
+    }
+
+    /// A sub-agent writes its own turns into the parent's transcript. Its usage
+    /// belongs to its own context, and the last line of a busy transcript is
+    /// very often one of these.
+    @Test func aSubAgentTurnIsNotThisSessionsContext() {
+        #expect(ClaudeTranscriptReader.parseTurn(
+            assistant(input: 5, cacheRead: 180_000, sidechain: true)) == nil)
+        #expect(ClaudeTranscriptReader.parseTurn(
+            #"{"type":"user","message":{"content":"hi"}}"#) == nil)
+        #expect(ClaudeTranscriptReader.parseTurn("") == nil)
+    }
+
+    @Test func theNewestNonSidechainTurnIsTheOneThatCounts() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("session.jsonl")
+
+        try [
+            assistant(input: 10, cacheRead: 100_000),
+            assistant(input: 5, cacheRead: 400_000, sidechain: true),   // sub-agent, ignored
+            assistant(input: 8, cacheRead: 299_992),                    // the real newest
+        ].joined(separator: "\n").appending("\n").write(to: file, atomically: true, encoding: .utf8)
+
+        let usage = try #require(ClaudeTranscriptReader.contextUsage(inTranscriptAt: file,
+                                                                    fallbackModel: nil))
+        #expect(usage.usedTokens == 300_000)
+        #expect(usage.limitTokens == 1_000_000, "claude-opus-5 holds 1M, not 200K")
+        #expect(usage.percent == 30)
+    }
+
+    /// A model absent from pricing.json has no denominator, so it gets no
+    /// meter — never a guessed window.
+    @Test func anUnknownModelHasNoMeter() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("session.jsonl")
+        try assistant(input: 10, cacheRead: 90_000, model: "claude-from-the-future")
+            .appending("\n").write(to: file, atomically: true, encoding: .utf8)
+
+        #expect(ClaudeTranscriptReader.contextUsage(inTranscriptAt: file, fallbackModel: nil) == nil)
+    }
+
+    /// Rows carry the shortened name the panel shows; the table is keyed by the
+    /// full id, and both have to resolve.
+    @Test func aShortenedModelNameStillFindsItsWindow() {
+        let table = ["claude-opus-5": 1_000_000, "claude-haiku-4-5": 200_000]
+        #expect(ContextWindows.window(forModel: "claude-opus-5", in: table) == 1_000_000)
+        #expect(ContextWindows.window(forModel: "opus-5", in: table) == 1_000_000)
+        #expect(ContextWindows.window(forModel: "haiku-4-5", in: table) == 200_000)
+        #expect(ContextWindows.window(forModel: "gpt-5.6-sol", in: table) == nil)
+        #expect(ContextWindows.window(forModel: nil, in: table) == nil)
+    }
+
+    /// The shipped table is the one the app actually reads.
+    @Test func theShippedTableCoversTheModelsInUse() {
+        #expect(ContextWindows.window(forModel: "claude-opus-5") == 1_000_000)
+        #expect(ContextWindows.window(forModel: "haiku-4-5") == 200_000)
+    }
+}
+
 struct TranscriptTailReaderTests {
     private func write(_ contents: String) throws -> URL {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())

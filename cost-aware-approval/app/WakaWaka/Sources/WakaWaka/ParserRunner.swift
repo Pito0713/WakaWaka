@@ -30,6 +30,10 @@ enum ParserRunner {
     }()
 
     private static let calculatorPath = "\(parserDir)/usage-calculator.ts"
+
+    /// The rate and context-window table lives beside the parser that also
+    /// reads it, so both find it by the same three-step search.
+    static var pricingPath: String { "\(parserDir)/pricing.json" }
     private static let p90Path        = "\(parserDir)/p90-detector.ts"
     private static let dailyUsagePath = "\(parserDir)/daily-usage.ts"
     private static let phaseUsagePath = "\(parserDir)/phase-usage.ts"

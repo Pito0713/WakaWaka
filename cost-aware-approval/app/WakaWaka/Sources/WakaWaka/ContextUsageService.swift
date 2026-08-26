@@ -26,12 +26,7 @@ enum ContextUsageService {
         var result: [String: ContextUsage] = [:]
 
         for row in rows {
-            // Phase 1 is Codex only: it states its own context window inside the
-            // transcript, so it needs no model table. Claude Code arrives with
-            // `pricing.json` in Phase 2 — until then it has no denominator, and
-            // a meter without one must not be drawn.
-            guard row.kind == .codex,
-                  let path = row.transcriptPath else { continue }
+            guard let path = row.transcriptPath else { continue }
             let url = URL(fileURLWithPath: path)
             guard let stamp = TranscriptTailReader.stamp(of: url) else { continue }
 
@@ -41,7 +36,7 @@ enum ContextUsageService {
                 continue
             }
 
-            let usage = CodexUsageService.contextUsage(inTranscriptAt: url)
+            let usage = read(kind: row.kind, at: url, fallbackModel: row.model)
             fresh[row.id] = CacheEntry(stamp: stamp, usage: usage)
             if let usage { result[row.id] = usage }
         }
@@ -50,6 +45,18 @@ enum ContextUsageService {
         // cache cannot outgrow the panel it serves.
         withLock { cache = fresh }
         return result
+    }
+
+    /// Each agent states its context differently: Codex writes its own window
+    /// into the transcript, Claude Code writes only what a turn consumed and
+    /// takes its denominator from `pricing.json`.
+    private static func read(kind: AgentKind, at url: URL, fallbackModel: String?) -> ContextUsage? {
+        switch kind {
+        case .codex:
+            return CodexUsageService.contextUsage(inTranscriptAt: url)
+        case .claudeCode:
+            return ClaudeTranscriptReader.contextUsage(inTranscriptAt: url, fallbackModel: fallbackModel)
+        }
     }
 
     /// Test seam: the cache is process-wide, so a case that seeds a transcript
