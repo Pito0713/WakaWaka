@@ -8,8 +8,19 @@ import Foundation
 /// freezes a popover mid-click. This is called from a background queue on a
 /// slower cadence instead, and the result is merged at render time.
 enum ContextUsageService {
-    private struct CacheEntry {
+    /// Everything the answer depends on. Keying on the file alone was wrong:
+    /// a row can change its transcript, or gain the model that supplies its
+    /// denominator, while the file it points at stays byte-identical — and the
+    /// cached `nil` would then outlive the reason it was nil.
+    private struct CacheKey: Equatable {
+        let path: String
+        let kind: AgentKind
+        let fallbackModel: String?
         let stamp: TranscriptTailReader.Stamp
+    }
+
+    private struct CacheEntry {
+        let key: CacheKey
         /// Cached even when nil: a transcript with no readable usage should be
         /// re-read when it changes, not on every pass.
         let usage: ContextUsage?
@@ -30,14 +41,16 @@ enum ContextUsageService {
             let url = URL(fileURLWithPath: path)
             guard let stamp = TranscriptTailReader.stamp(of: url) else { continue }
 
-            if let cached = snapshot[row.id], cached.stamp == stamp {
+            let key = CacheKey(path: path, kind: row.kind,
+                               fallbackModel: row.model, stamp: stamp)
+            if let cached = snapshot[row.id], cached.key == key {
                 fresh[row.id] = cached
                 if let usage = cached.usage { result[row.id] = usage }
                 continue
             }
 
             let usage = read(kind: row.kind, at: url, fallbackModel: row.model)
-            fresh[row.id] = CacheEntry(stamp: stamp, usage: usage)
+            fresh[row.id] = CacheEntry(key: key, usage: usage)
             if let usage { result[row.id] = usage }
         }
 
@@ -57,12 +70,6 @@ enum ContextUsageService {
         case .claudeCode:
             return ClaudeTranscriptReader.contextUsage(inTranscriptAt: url, fallbackModel: fallbackModel)
         }
-    }
-
-    /// Test seam: the cache is process-wide, so a case that seeds a transcript
-    /// must be able to start from nothing.
-    static func resetCache() {
-        withLock { cache = [:] }
     }
 
     @discardableResult

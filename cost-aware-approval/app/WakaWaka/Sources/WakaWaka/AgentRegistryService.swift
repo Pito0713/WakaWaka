@@ -214,7 +214,7 @@ enum AgentRegistryService {
             gitBranch: entry.gitBranch.map { sanitize($0, limit: 24) },
             model: entry.model.map { sanitize(shortModelName($0), limit: 20) },
             tmuxSession: entry.tmuxSession.flatMap { sanitizedOptional($0, limit: 48) },
-            transcriptPath: entry.transcriptPath.flatMap(validatedTranscriptPath),
+            transcriptPath: entry.transcriptPath.flatMap { validatedTranscriptPath($0) },
             skill: entry.skill.map { sanitize($0, limit: 24) },
             skillSource: entry.skillSource,
             lastTool: entry.lastTool.map { sanitize($0, limit: 20) },
@@ -248,11 +248,19 @@ enum AgentRegistryService {
     /// is an ordinary file on disk that anything on this machine can write.
     /// Truncating or cleaning it would be wrong — a path that is not exactly
     /// what was recorded is not the transcript, so a suspect value is dropped.
-    static func validatedTranscriptPath(_ path: String) -> String? {
+    static func validatedTranscriptPath(
+        _ path: String,
+        home: String = FileManager.default.homeDirectoryForCurrentUser.path
+    ) -> String? {
+        // Anchored to this user's home rather than matched loosely: a bare
+        // `/.claude/` substring is satisfied by `/tmp/anything/.claude/x`, and
+        // the point of the check is that the app only ever opens transcripts
+        // where transcripts actually live.
+        let roots = ["\(home)/.claude/", "\(home)/.codex/"]
         guard path.hasPrefix("/"), path.count <= 512,
               !path.contains("/../"), !path.hasSuffix("/.."),
               path.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
-              path.contains("/.claude/") || path.contains("/.codex/") else { return nil }
+              roots.contains(where: path.hasPrefix) else { return nil }
         return path
     }
 

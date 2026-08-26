@@ -5,6 +5,10 @@ import Foundation
 /// Unlike Codex, which states its own window, Claude Code records only what
 /// each turn consumed — the denominator comes from `ContextWindows`.
 enum ClaudeTranscriptReader {
+    /// Far above any real context window, far below anything that could
+    /// overflow when three of them are added.
+    static let plausibleTokenCeiling = 100_000_000
+
     /// What one assistant turn had in front of it.
     struct Turn: Equatable {
         let model: String?
@@ -52,9 +56,17 @@ enum ClaudeTranscriptReader {
               parsed.isSidechain != true,
               let usage = parsed.message?.usage else { return nil }
 
-        let tokens = (usage.inputTokens ?? 0)
-            + (usage.cacheCreationInputTokens ?? 0)
-            + (usage.cacheReadInputTokens ?? 0)
+        // These three come off disk and are summed. Swift's `+` traps on
+        // overflow, so a corrupt or hostile number would take the whole app
+        // down; bounding each field first makes the sum unable to overflow.
+        // Rejecting rather than clamping is the honest answer — a context of a
+        // hundred million tokens is not a context, and a clamped number would
+        // draw a confident meter from nonsense.
+        let fields = [usage.inputTokens ?? 0,
+                      usage.cacheCreationInputTokens ?? 0,
+                      usage.cacheReadInputTokens ?? 0]
+        guard fields.allSatisfy({ (0...plausibleTokenCeiling).contains($0) }) else { return nil }
+        let tokens = fields.reduce(0, +)
         guard tokens > 0 else { return nil }
         return Turn(model: parsed.message?.model, contextTokens: tokens)
     }
@@ -63,11 +75,7 @@ enum ClaudeTranscriptReader {
     /// window. `fallbackModel` covers a turn that names no model — the registry
     /// records one too, in the shortened form the panel displays.
     static func contextUsage(inTranscriptAt url: URL, fallbackModel: String?) -> ContextUsage? {
-        guard let turn = TranscriptTailReader.tailLines(of: url)
-            .reversed()
-            .lazy
-            .compactMap(parseTurn)
-            .first else { return nil }
+        guard let turn = TranscriptTailReader.newest(of: url, decode: parseTurn) else { return nil }
 
         guard let window = ContextWindows.window(forModel: turn.model ?? fallbackModel) else {
             return nil

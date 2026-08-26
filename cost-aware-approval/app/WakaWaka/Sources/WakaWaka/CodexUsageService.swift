@@ -139,11 +139,7 @@ enum CodexUsageService {
     static func contextUsage(inTranscriptAt url: URL) -> ContextUsage? {
         // Later lines win: the file is append-only, so the last `token_count`
         // is the current state of that session.
-        TranscriptTailReader.tailLines(of: url)
-            .reversed()
-            .lazy
-            .compactMap(parseContextUsage)
-            .first
+        TranscriptTailReader.newest(of: url, decode: parseContextUsage)
     }
 
     private static func directoryExists(_ url: URL) -> Bool {

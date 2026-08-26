@@ -183,6 +183,139 @@ struct ClaudeTranscriptTests {
     }
 }
 
+struct TranscriptDefenceTests {
+    private func makeDir() throws -> URL {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func assistantLine(cacheRead: Int, padding: Int = 0) -> String {
+        """
+        {"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-5",\
+        "usage":{"input_tokens":2,"cache_creation_input_tokens":0,\
+        "cache_read_input_tokens":\(cacheRead),"output_tokens":9},\
+        "text":"\(String(repeating: "x", count: padding))"}}
+        """
+    }
+
+    /// An assistant line carries the whole message, so one long code block can
+    /// exceed any fixed tail window — and because a truncated first line must
+    /// be dropped, a window smaller than that line yields nothing at all. The
+    /// meter then vanishes on exactly the sessions that most need it.
+    @Test func aLastLineLongerThanTheFirstWindowIsStillFound() throws {
+        let dir = try makeDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("session.jsonl")
+        try "\(assistantLine(cacheRead: 299_998, padding: 80_000))\n"
+            .write(to: file, atomically: true, encoding: .utf8)
+
+        let usage = try #require(ClaudeTranscriptReader.contextUsage(inTranscriptAt: file,
+                                                                    fallbackModel: nil))
+        #expect(usage.usedTokens == 300_000)
+        #expect(usage.percent == 30)
+    }
+
+    /// Swift's `+` traps on overflow, so three unbounded numbers read off disk
+    /// are a crash waiting for a corrupt transcript. Rejected, not clamped: a
+    /// clamped number would draw a confident meter out of nonsense.
+    @Test func implausibleTokenCountsAreRefusedRatherThanSummed() {
+        let huge = Int.max
+        let line = """
+        {"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-5",\
+        "usage":{"input_tokens":\(huge),"cache_creation_input_tokens":\(huge),\
+        "cache_read_input_tokens":\(huge),"output_tokens":1}}}
+        """
+        #expect(ClaudeTranscriptReader.parseTurn(line) == nil)
+
+        let justOver = ClaudeTranscriptReader.plausibleTokenCeiling + 1
+        let overLine = """
+        {"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-5",\
+        "usage":{"input_tokens":\(justOver),"cache_creation_input_tokens":0,\
+        "cache_read_input_tokens":0,"output_tokens":1}}}
+        """
+        #expect(ClaudeTranscriptReader.parseTurn(overLine) == nil)
+        #expect(ClaudeTranscriptReader.parseTurn(assistantLine(cacheRead: 500))?.contextTokens == 502,
+                "ordinary numbers still pass")
+    }
+
+    /// A fifo where a transcript used to be would block this thread on `open`,
+    /// and one stuck thread arrives every five seconds.
+    @Test func aFifoInPlaceOfATranscriptCannotBlockTheReader() throws {
+        let dir = try makeDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fifo = dir.appendingPathComponent("session.jsonl")
+        #expect(mkfifo(fifo.path, 0o600) == 0)
+
+        #expect(TranscriptTailReader.tailLines(of: fifo).isEmpty)
+        #expect(TranscriptTailReader.stamp(of: fifo) == nil)
+    }
+
+    /// `/.claude/` as a substring is satisfied by any directory anyone can
+    /// create; the app must only open transcripts where transcripts live.
+    @Test func aTranscriptPathOutsideTheHomeDirectoryIsRefused() {
+        let home = "/tmp/agent-home"
+        let check = { AgentRegistryService.validatedTranscriptPath($0, home: home) }
+
+        #expect(check("\(home)/.claude/projects/-x/s.jsonl") == "\(home)/.claude/projects/-x/s.jsonl")
+        #expect(check("\(home)/.codex/sessions/2026/r.jsonl") == "\(home)/.codex/sessions/2026/r.jsonl")
+        #expect(check("/tmp/anywhere/.claude/s.jsonl") == nil, "a substring match is not a root")
+        #expect(check("/tmp/another-home/.claude/s.jsonl") == nil, "another home is not this one")
+        #expect(check("\(home)/.claude/../../etc/passwd") == nil)
+        #expect(check("\(home)/Documents/notes.jsonl") == nil)
+    }
+}
+
+struct ContextUsageCacheTests {
+    private func row(id: String, kind: AgentKind, path: String, model: String?) -> ActiveAgentRow {
+        ActiveAgentRow(
+            id: id, kind: kind, pid: 1, pidStartedAt: nil,
+            projectName: "demo", fullPath: "/demo", gitBranch: nil, model: model,
+            transcriptPath: path, skill: nil, skillSource: nil, lastTool: nil,
+            state: .idle, heartbeatAt: Date()
+        )
+    }
+
+    /// The file is unchanged, but the row has gained the model that supplies
+    /// its denominator. Keyed on the file alone, the cached "no meter" answer
+    /// would outlive the reason it was given.
+    @Test func gainingAModelInvalidatesACachedMiss() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let file = dir.appendingPathComponent("session.jsonl")
+        // No model on the turn itself, so the row's own model decides.
+        try #"""
+        {"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":249990,"output_tokens":1}}}
+        """#.appending("\n").write(to: file, atomically: true, encoding: .utf8)
+
+        let unknown = row(id: "a", kind: .claudeCode, path: file.path, model: nil)
+        #expect(ContextUsageService.usage(for: [unknown]).isEmpty, "no denominator yet")
+
+        let known = row(id: "a", kind: .claudeCode, path: file.path, model: "opus-5")
+        let usage = try #require(ContextUsageService.usage(for: [known])["a"])
+        #expect(usage.percent == 25)
+    }
+
+    @Test func aSessionThatEndsLeavesNothingBehind() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("session.jsonl")
+        try #"""
+        {"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-5","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":99990,"output_tokens":1}}}
+        """#.appending("\n").write(to: file, atomically: true, encoding: .utf8)
+
+        let live = row(id: "b", kind: .claudeCode, path: file.path, model: nil)
+        #expect(ContextUsageService.usage(for: [live])["b"] != nil)
+        #expect(ContextUsageService.usage(for: []).isEmpty)
+    }
+}
+
 struct TranscriptTailReaderTests {
     private func write(_ contents: String) throws -> URL {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())

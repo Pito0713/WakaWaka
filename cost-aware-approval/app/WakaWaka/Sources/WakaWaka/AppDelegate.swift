@@ -37,6 +37,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var usageCommandTimer: Timer?
     private var codexUsageTimer: Timer?
     private var contextUsageTimer: Timer?
+    /// Same guard the manual agent refresh uses: a slow pass must not
+    /// land after a newer one and walk the meters backwards.
+    private var contextScanGeneration = 0
     // agy quota (5-minute interval)
     private var agyQuotaTimer: Timer?
     // Auto-mode expiry sweep (30-second interval)
@@ -483,10 +486,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !viewModel.contextUsage.isEmpty { viewModel.contextUsage = [:] }
             return
         }
+        contextScanGeneration += 1
+        let generation = contextScanGeneration
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let usage = ContextUsageService.usage(for: rows)
             DispatchQueue.main.async {
-                guard let self, usage != self.viewModel.contextUsage else { return }
+                guard let self, generation == self.contextScanGeneration,
+                      usage != self.viewModel.contextUsage else { return }
                 self.viewModel.contextUsage = usage
                 self.floatingPanelController?.update(contextUsage: usage)
                 // Crossing into the critical band adds a line to a row, so the
