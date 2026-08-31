@@ -20,7 +20,7 @@ WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依�
 | **Active Agents 面板** | popover 底部列出現在活著的 agent session：專案、branch、狀態、正在跑的工具或 skill。以 pid 判定存活而非時間新舊，崩潰的 session 會消失而不是繼續顯示。點一列即切換到該 agent 的終端機視窗；旁邊的刷新鈕強制重新檢查所有行程 |
 | **懸浮 Agent HUD**   | 把上面那份清單拉出 popover：常駐置頂、不搶焦點的小視窗，不必點 menu bar 就知道誰在跑、誰卡住。`NSPanel` + `.nonactivatingPanel`，點一列直接跳該 agent 的終端機而不會先把焦點搶過來；位置與可見狀態記在偏好設定 |
 | **三層風險分類**     | CRITICAL → HIGH → MEDIUM；各 agent adapter 採 fail-closed 策略，Codex 的 CRITICAL shell 操作會立即拒絕 |
-| **Auto 模式**        | per-agent 開關；開啟後自動放行白名單 MEDIUM（Edit/Write/MultiEdit + 未知 bash），HIGH/CRITICAL 與 MCP 仍彈窗；30 分鐘 TTL + fail-closed 稽核（`~/.wakawaka/auto-audit.jsonl`） |
+| **Auto 模式**        | per-agent 開關；開啟後自動放行白名單 MEDIUM（Edit/Write/MultiEdit + 未知 bash），HIGH/CRITICAL 與 MCP 仍彈窗；常駐開啟直到手動關閉 + fail-closed 稽核（`~/.wakawaka/auto-audit.jsonl`） |
 | **多代理支援**       | 同時守護 Claude Code 與 Codex，agent badge 顯示工具呼叫來源                                               |
 | **Codex Usage**      | 從本機 Codex session 資料彙整 5h 與 weekly 用量，獨立於 Claude Code usage 顯示                            |
 | **Token 用量追蹤**   | 從 `~/.claude/projects/` JSONL 解析，全域合併去重，誤差 < 3%                                             |

@@ -4,7 +4,7 @@ import SwiftUI
 /// pending-approval states. Keeps only the at-a-glance controls; anything that
 /// belongs to detailed inspection now lives in the standalone usage dashboard.
 ///
-///   Row 1  — per-agent auto-mode toggles (with TTL countdown) + 📊 / ↻ actions
+///   Row 1  — per-agent auto-mode toggles + 📊 / ↻ actions
 ///   Row 2  — Claude 5h quota bar
 ///   Row 3  — Codex 7d quota bar
 ///

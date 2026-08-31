@@ -11,7 +11,7 @@
 現有分區：
 - **審批卡片區**：每個 pending 一張卡。動作 = Allow / Always Allow / Deny / Dismiss（過期項）。可展開看該 session 用量明細（`onToggleExpand`）。
 - **Session 狀態列**（常駐）：近 5h token 用量 %、burn rate、成本估算。
-- **Auto 模式列**：per-agent（claude-code / agy）自動放行開關，30 分鐘 TTL + 倒數。
+- **Auto 模式列**：per-agent（claude-code / agy）自動放行開關，常駐開啟直到手動關閉。
 - **agy quota**：agy 額度顯示。
 - **空狀態**（無 pending）：只顯示 Session 狀態列 + Auto 模式列。
 

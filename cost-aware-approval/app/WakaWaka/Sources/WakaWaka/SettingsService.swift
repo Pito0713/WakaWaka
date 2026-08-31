@@ -117,29 +117,20 @@ extension WakaWakaSettings: Codable {
 /// and a partial write must never be observable by the hook (atomic write).
 final class SettingsService {
     static let shared = SettingsService()
-    private init() {}
+    private let settingsURL: URL
 
-    /// Auto mode stays on for 30 minutes after the user flips the toggle.
-    static let autoModeDurationSeconds: TimeInterval = 1800
-
-    private var settingsURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".wakawaka/settings.json")
+    init(settingsURL: URL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".wakawaka/settings.json")) {
+        self.settingsURL = settingsURL
     }
 
     /// Parses an `expiresAt` string. Tries the fractional-seconds format
-    /// (what `setAutoMode` writes) first, then the plain ISO-8601 format,
-    /// so timestamps written by an older build still parse.
+    /// first, then the plain ISO-8601 format, so timestamps written by an
+    /// older build still parse.
     static func parseExpiry(_ s: String) -> Date? {
         let withFraction = ISO8601DateFormatter()
         withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return withFraction.date(from: s) ?? ISO8601DateFormatter().date(from: s)
-    }
-
-    private static func formatExpiry(_ date: Date) -> String {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f.string(from: date)
     }
 
     /// Loads current settings. A missing file or malformed JSON both fall
@@ -154,15 +145,11 @@ final class SettingsService {
         return decoded
     }
 
-    /// Enables auto mode for `agent` for `autoModeDurationSeconds`, or
-    /// disables it immediately. Read-modify-write so toggling one agent
-    /// never clobbers the other agent's persisted state.
+    /// Enables auto mode for `agent` until explicitly disabled.
+    /// Read-modify-write keeps the other agents' persisted states intact.
     func setAutoMode(agent: AutoModeAgent, enabled: Bool) {
         var settings = load()
-        let newState = AgentAutoMode(
-            enabled: enabled,
-            expiresAt: enabled ? Self.formatExpiry(Date().addingTimeInterval(Self.autoModeDurationSeconds)) : nil
-        )
+        let newState = AgentAutoMode(enabled: enabled, expiresAt: nil)
         switch agent {
         case .claudeCode: settings.autoMode.claudeCode = newState
         case .agy:         settings.autoMode.agy = newState
