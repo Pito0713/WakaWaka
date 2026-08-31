@@ -9,9 +9,18 @@ import Testing
 /// fixture path is UUID-based, which also keeps these safe under swift-testing's
 /// parallel execution.
 struct CodexUsageServiceTests {
-    private func event(percent: Double, timestamp: String, window: Int = 10_080) -> String {
-        """
-        {"timestamp":"\(timestamp)","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":\(percent),"window_minutes":\(window)}}}}
+    private func event(
+        percent: Double,
+        timestamp: String,
+        window: Int = 10_080,
+        secondaryPercent: Double? = nil,
+        secondaryWindow: Int = 10_080
+    ) -> String {
+        let secondary = secondaryPercent.map {
+            ",\"secondary\":{\"used_percent\":\($0),\"window_minutes\":\(secondaryWindow)}"
+        } ?? ""
+        return """
+        {"timestamp":"\(timestamp)","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":\(percent),"window_minutes":\(window)}\(secondary)}}}
         """
     }
 
@@ -40,9 +49,69 @@ struct CodexUsageServiceTests {
 
         let result = try #require(CodexUsageService.parseEventLine(line))
 
-        #expect(result.usedPercent == 42)
-        #expect(result.windowMinutes == 10_080)
-        #expect(result.resetsAt != nil)
+        #expect(result.primary.usedPercent == 42)
+        #expect(result.primary.windowMinutes == 10_080)
+        #expect(result.primary.resetsAt != nil)
+    }
+
+    @Test func parsesPrimaryAndSecondaryRateLimitWindows() throws {
+        let now = Date(timeIntervalSince1970: 1_788_160_000)
+        let timestamp = ISO8601DateFormatter().string(from: now)
+        let line = """
+        {"timestamp":"\(timestamp)","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":11.0,"window_minutes":300,"resets_at":1788164343},"secondary":{"used_percent":2.0,"window_minutes":10080,"resets_at":1788751143}}}}
+        """
+
+        let result = try #require(CodexUsageService.parseEventLine(line, now: now))
+        let secondary = try #require(result.secondary)
+
+        #expect(result.primary.usedPercent == 11)
+        #expect(result.primary.windowMinutes == 300)
+        #expect(result.primary.resetsAt == Date(timeIntervalSince1970: 1_788_164_343))
+        #expect(secondary.usedPercent == 2)
+        #expect(secondary.windowMinutes == 10_080)
+        #expect(secondary.resetsAt == Date(timeIntervalSince1970: 1_788_751_143))
+    }
+
+    @Test func parsesLegacyWeeklyWindowWithoutSecondary() throws {
+        let now = Date(timeIntervalSince1970: 1_788_160_000)
+        let line = event(percent: 42.4, timestamp: ISO8601DateFormatter().string(from: now))
+
+        let result = try #require(CodexUsageService.parseEventLine(line, now: now))
+
+        #expect(result.secondary == nil)
+        #expect(result.primary.windowText == "1w window")
+    }
+
+    @Test func ignoresInvalidSecondaryPercentWithoutRejectingPrimary() throws {
+        let now = Date(timeIntervalSince1970: 1_788_160_000)
+        let line = event(
+            percent: 11,
+            timestamp: ISO8601DateFormatter().string(from: now),
+            window: 300,
+            secondaryPercent: 150,
+            secondaryWindow: 10_080
+        )
+
+        let result = try #require(CodexUsageService.parseEventLine(line, now: now))
+
+        #expect(result.primary.usedPercent == 11)
+        #expect(result.secondary == nil)
+    }
+
+    @Test func ignoresSecondaryWhenItDuplicatesPrimaryWindow() throws {
+        let now = Date(timeIntervalSince1970: 1_788_160_000)
+        let line = event(
+            percent: 11,
+            timestamp: ISO8601DateFormatter().string(from: now),
+            window: 300,
+            secondaryPercent: 2,
+            secondaryWindow: 300
+        )
+
+        let result = try #require(CodexUsageService.parseEventLine(line, now: now))
+
+        #expect(result.primary.windowMinutes == 300)
+        #expect(result.secondary == nil)
     }
 
     @Test func rejectsContextOnlyTokenCount() {
@@ -82,7 +151,7 @@ struct CodexUsageServiceTests {
         try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: olderEvent.path)
         try FileManager.default.setAttributes([.modificationDate: Date.distantPast], ofItemAtPath: newerEvent.path)
 
-        #expect(try availableInfo(CodexUsageService.load(from: directory)).usedPercent == 80)
+        #expect(try availableInfo(CodexUsageService.load(from: directory)).primary.usedPercent == 80)
     }
 
     @Test func selectsNewestTimestampWithinFile() throws {
@@ -95,7 +164,7 @@ struct CodexUsageServiceTests {
         ].joined(separator: "\n")
         try content.write(to: directory.appendingPathComponent("events.jsonl"), atomically: true, encoding: .utf8)
 
-        #expect(try availableInfo(CodexUsageService.load(from: directory)).usedPercent == 70)
+        #expect(try availableInfo(CodexUsageService.load(from: directory)).primary.usedPercent == 70)
     }
 
     @Test func corruptFileDoesNotHideValidFile() throws {
@@ -113,7 +182,7 @@ struct CodexUsageServiceTests {
             encoding: .utf8
         )
 
-        #expect(try availableInfo(CodexUsageService.load(from: directory)).usedPercent == 55)
+        #expect(try availableInfo(CodexUsageService.load(from: directory)).primary.usedPercent == 55)
     }
 
     @Test func rejectsSymlink() throws {
@@ -158,12 +227,55 @@ struct CodexUsageServiceTests {
     }
 
     @Test func minuteWindowText() {
-        let info = CodexUsageInfo(
+        let info = CodexWindowUsage(
             usedPercent: 1,
             windowMinutes: 59,
-            resetsAt: nil,
-            fetchedAt: Date()
+            resetsAt: nil
         )
         #expect(info.windowText == "59m window")
+    }
+
+    @Test func expiredResetUsesSnapshotExpiredInsteadOfResetting() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let info = usageInfo(resetsAt: now.addingTimeInterval(-1), fetchedAt: now)
+
+        let text = info.primary.resetText(now: now)
+
+        #expect(text == "Snapshot expired")
+        #expect(text?.contains("Resetting") == false)
+    }
+
+    @Test func missingResetHasNoResetText() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        #expect(usageInfo(resetsAt: nil, fetchedAt: now).primary.resetText(now: now) == nil)
+    }
+
+    @Test func resetNinetyMinutesAwayUsesHoursAndMinutes() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let info = usageInfo(resetsAt: now.addingTimeInterval(90 * 60), fetchedAt: now)
+
+        #expect(info.primary.resetText(now: now) == "Resets in 1h 30m")
+    }
+
+    @Test func resetTwoDaysAndThreeHoursAwayUsesDaysAndHours() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let info = usageInfo(resetsAt: now.addingTimeInterval((2 * 86_400) + (3 * 3_600)), fetchedAt: now)
+
+        #expect(info.primary.resetText(now: now) == "Resets in 2d 3h")
+    }
+
+    @Test func snapshotTextNamesTheReadingItCameFrom() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        // The exact rendering follows the locale, so only the labelling is asserted.
+        #expect(usageInfo(resetsAt: nil, fetchedAt: now).snapshotText().hasPrefix("Snapshot "))
+    }
+
+    private func usageInfo(resetsAt: Date?, fetchedAt: Date) -> CodexUsageInfo {
+        CodexUsageInfo(
+            primary: CodexWindowUsage(usedPercent: 3, windowMinutes: 300, resetsAt: resetsAt),
+            secondary: nil,
+            fetchedAt: fetchedAt
+        )
     }
 }

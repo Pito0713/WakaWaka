@@ -547,13 +547,10 @@ enum CodexUsageState: Equatable {
     case error(String)
 }
 
-struct CodexUsageInfo: Equatable {
+struct CodexWindowUsage: Equatable {
     let usedPercent: Int
     let windowMinutes: Int
     let resetsAt: Date?
-    let fetchedAt: Date
-
-    var isStale: Bool { Date().timeIntervalSince(fetchedAt) > 660 }
 
     var windowText: String {
         guard windowMinutes > 0 else { return "Account limit" }
@@ -567,5 +564,44 @@ struct CodexUsageInfo: Equatable {
             return "\(windowMinutes / 1_440)d window"
         }
         return "\(windowMinutes / 60)h window"
+    }
+
+    func resetText(now: Date = Date()) -> String? {
+        guard let resetsAt else { return nil }
+        let remainingSeconds = Int(resetsAt.timeIntervalSince(now))
+
+        // A snapshot surviving beyond its own window means the account has already
+        // reset and its percentage is fictional; only a live reading can be resetting.
+        guard remainingSeconds > 0 else { return "Snapshot expired" }
+
+        let days = remainingSeconds / 86_400
+        if days > 0 {
+            let hours = (remainingSeconds % 86_400) / 3_600
+            if hours > 0 { return "Resets in \(days)d \(hours)h" }
+            let minutes = (remainingSeconds % 3_600) / 60
+            return "Resets in \(days)d \(minutes)m"
+        }
+
+        let hours = remainingSeconds / 3_600
+        let minutes = (remainingSeconds % 3_600) / 60
+        return hours > 0 ? "Resets in \(hours)h \(minutes)m" : "Resets in \(minutes)m"
+    }
+}
+
+struct CodexUsageInfo: Equatable {
+    let primary: CodexWindowUsage
+    let secondary: CodexWindowUsage?
+    let fetchedAt: Date
+
+    var isStale: Bool { Date().timeIntervalSince(fetchedAt) > 660 }
+
+    /// Absolute local time of the reading rather than a relative age: comparing
+    /// this figure between machines is the point — each one carries its own snapshot.
+    func snapshotText() -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        formatter.timeZone = .current
+        return "Snapshot \(formatter.string(from: fetchedAt))"
     }
 }

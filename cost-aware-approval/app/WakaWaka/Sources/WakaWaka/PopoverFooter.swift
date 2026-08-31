@@ -145,16 +145,23 @@ struct PopoverFooter: View {
     private var codexBar: some View {
         switch model.codexUsageState {
         case .available(let info):
-            usageBar(
-                name: "Codex",
-                window: info.windowText,
-                progress: min(max(Double(info.usedPercent) / 100, 0), 1),
-                percentLabel: "\(info.usedPercent)%",
-                trailing: info.resetsAt.map { compactResetText(from: $0) }
-            )
+            codexUsageBar(info.primary, isStale: info.isStale)
+            if let secondary = info.secondary {
+                codexUsageBar(secondary, isStale: info.isStale)
+            }
         case .unavailable, .error:
-            usageBar(name: "Codex", window: "7d", progress: nil, percentLabel: "—", trailing: nil)
+            usageBar(name: "Codex", window: "account quota", progress: nil, percentLabel: "—", trailing: nil)
         }
+    }
+
+    private func codexUsageBar(_ usage: CodexWindowUsage, isStale: Bool) -> some View {
+        usageBar(
+            name: "Codex",
+            window: isStale ? "\(usage.windowText) · stale" : usage.windowText,
+            progress: min(max(Double(usage.usedPercent) / 100, 0), 1),
+            percentLabel: "\(usage.usedPercent)%",
+            trailing: usage.resetText()
+        )
     }
 
     /// Claude quota: prefer server-verified % (when fresh), else local session output ratio.
@@ -218,14 +225,4 @@ struct PopoverFooter: View {
         progress > 0.85 ? .red : progress > 0.65 ? .orange : Color(NSColor.controlAccentColor)
     }
 
-    private func compactResetText(from reset: Date) -> String {
-        let remainingSeconds = Int(reset.timeIntervalSinceNow)
-        guard remainingSeconds > 0 else { return "Resetting…" }
-        let days = remainingSeconds / 86_400
-        guard days > 0 else { return ClaudeUsageInfo.resetsInText(from: reset) }
-        let hours = (remainingSeconds % 86_400) / 3_600
-        if hours > 0 { return "Resets in \(days)d \(hours)h" }
-        let minutes = (remainingSeconds % 3_600) / 60
-        return "Resets in \(days)d \(minutes)m"
-    }
 }

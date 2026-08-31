@@ -51,6 +51,7 @@ enum CodexUsageService {
 
     private struct RateLimits: Decodable {
         let primary: Limit?
+        let secondary: Limit?
     }
 
     private struct Limit: Decodable {
@@ -104,18 +105,34 @@ enum CodexUsageService {
               let event = try? JSONDecoder().decode(Event.self, from: data),
               event.type == "event_msg",
               event.payload.type == "token_count",
-              let limit = event.payload.rateLimits?.primary,
-              limit.usedPercent.isFinite,
-              (0...100).contains(limit.usedPercent),
-              (1...525_600).contains(limit.windowMinutes),
+              let rateLimits = event.payload.rateLimits,
+              let primary = rateLimits.primary,
+              isValid(primary),
               let fetchedAt = validTimestamp(event.timestamp, now: now) else {
             return nil
         }
+        let secondary: CodexWindowUsage? = rateLimits.secondary.flatMap { limit in
+            guard isValid(limit), limit.windowMinutes != primary.windowMinutes else { return nil }
+            return windowUsage(from: limit, fetchedAt: fetchedAt)
+        }
         return CodexUsageInfo(
+            primary: windowUsage(from: primary, fetchedAt: fetchedAt),
+            secondary: secondary,
+            fetchedAt: fetchedAt
+        )
+    }
+
+    private static func isValid(_ limit: Limit) -> Bool {
+        limit.usedPercent.isFinite
+            && (0...100).contains(limit.usedPercent)
+            && (1...525_600).contains(limit.windowMinutes)
+    }
+
+    private static func windowUsage(from limit: Limit, fetchedAt: Date) -> CodexWindowUsage {
+        CodexWindowUsage(
             usedPercent: Int(limit.usedPercent.rounded()),
             windowMinutes: limit.windowMinutes,
-            resetsAt: limit.resetsAt.flatMap { validResetDate($0, relativeTo: fetchedAt) },
-            fetchedAt: fetchedAt
+            resetsAt: limit.resetsAt.flatMap { validResetDate($0, relativeTo: fetchedAt) }
         )
     }
 

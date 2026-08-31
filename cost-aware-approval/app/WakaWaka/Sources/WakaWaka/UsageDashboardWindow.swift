@@ -316,24 +316,35 @@ struct UsageDashboardView: View {
     private func codexQuotaRow(_ state: CodexUsageState) -> some View {
         switch state {
         case .available(let info):
-            let progress = clampedProgress(Double(info.usedPercent) / 100)
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Text("Codex \(info.windowText)").font(.callout.weight(.medium))
-                    freshnessIndicator(isStale: info.isStale)
-                    Spacer()
-                    Text(info.resetsAt.map(compactResetText) ?? "—")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .id(now)
-                }
-                quotaProgressBar(progress: progress, percentText: "\(info.usedPercent)%")
+            codexWindowQuotaRow(info.primary, info: info)
+            if let secondary = info.secondary {
+                codexWindowQuotaRow(secondary, info: info)
             }
         case .unavailable:
-            unavailableQuotaRow(label: "Codex 7d", message: "unavailable")
+            unavailableQuotaRow(label: "Codex account quota", message: "unavailable")
         case .error:
-            unavailableQuotaRow(label: "Codex 7d", message: "error")
+            unavailableQuotaRow(label: "Codex account quota", message: "error")
+        }
+    }
+
+    private func codexWindowQuotaRow(_ usage: CodexWindowUsage, info: CodexUsageInfo) -> some View {
+        let progress = clampedProgress(Double(usage.usedPercent) / 100)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Codex \(usage.windowText)\(info.isStale ? " · stale" : "")")
+                    .font(.callout.weight(.medium))
+                freshnessIndicator(
+                    isStale: info.isStale,
+                    helpText: "\(info.isStale ? "Stale local account snapshot" : "Local Codex account snapshot") · \(info.snapshotText())"
+                )
+                Spacer()
+                Text(usage.resetText() ?? "—")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .id(now)
+            }
+            quotaProgressBar(progress: progress, percentText: "\(usage.usedPercent)%")
         }
     }
 
@@ -462,11 +473,11 @@ struct UsageDashboardView: View {
         return hours > 0 ? "Resets in \(days)d \(hours)h" : "Resets in \(days)d"
     }
 
-    private func freshnessIndicator(isStale: Bool) -> some View {
+    private func freshnessIndicator(isStale: Bool, helpText: String? = nil) -> some View {
         Circle()
             .fill(isStale ? Color.orange : Color.green.opacity(0.85))
             .frame(width: 6, height: 6)
-            .help(isStale ? "資料已過期" : "資料為最新")
+            .help(helpText ?? (isStale ? "資料已過期" : "資料為最新"))
     }
 
     private func quotaBarColor(_ progress: Double) -> Color {

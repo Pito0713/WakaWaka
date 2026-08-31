@@ -73,17 +73,6 @@ struct SessionStatusView: View {
         claudeUsage.map { !$0.isStale } ?? false
     }
 
-    private func compactResetText(from reset: Date) -> String {
-        let remainingSeconds = Int(reset.timeIntervalSinceNow)
-        guard remainingSeconds > 0 else { return "Resetting…" }
-        let days = remainingSeconds / 86_400
-        guard days > 0 else { return ClaudeUsageInfo.resetsInText(from: reset) }
-        let hours = (remainingSeconds % 86_400) / 3_600
-        if hours > 0 { return "Resets in \(days)d \(hours)h" }
-        let minutes = (remainingSeconds % 3_600) / 60
-        return "Resets in \(days)d \(minutes)m"
-    }
-
     // MARK: - Body
 
     var body: some View {
@@ -240,25 +229,35 @@ struct SessionStatusView: View {
 
     private func codexAvailableRow(_ info: CodexUsageInfo) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            codexWindowRow(info.primary, info: info)
+            if let secondary = info.secondary {
+                codexWindowRow(secondary, info: info)
+            }
+        }
+    }
+
+    private func codexWindowRow(_ usage: CodexWindowUsage, info: CodexUsageInfo) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text("Codex").font(.caption.weight(.medium)).frame(width: 48, alignment: .leading)
                 Circle()
                     .fill(info.isStale ? Color.orange : Color.green.opacity(0.85))
                     .frame(width: 5, height: 5)
-                    .help(info.isStale ? "Stale local account snapshot" : "Local Codex account snapshot")
+                    .help("\(info.isStale ? "Stale local account snapshot" : "Local Codex account snapshot") · \(info.snapshotText())")
                 Text(info.isStale ? "local · stale" : "local")
                     .font(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                Text(info.windowText).font(.caption).foregroundStyle(.secondary)
-                if let reset = info.resetsAt {
-                    Text("· \(compactResetText(from: reset))")
+                // No stale marker here: this row already carries one on its left.
+                Text(usage.windowText).font(.caption).foregroundStyle(.secondary)
+                if let resetText = usage.resetText() {
+                    Text("· \(resetText)")
                         .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                         .layoutPriority(1)
                 }
             }
-            providerProgressBar(percent: info.usedPercent)
+            providerProgressBar(percent: usage.usedPercent)
         }
     }
 
