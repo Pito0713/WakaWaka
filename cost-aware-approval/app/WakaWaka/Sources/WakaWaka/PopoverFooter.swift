@@ -6,7 +6,7 @@ import SwiftUI
 ///
 ///   Row 1  — per-agent auto-mode toggles + 📊 / ↻ actions
 ///   Row 2  — Claude 5h quota bar
-///   Row 3  — Codex 7d quota bar
+///   Row 3  — Codex quota bar (primary window only; see the dashboard for the rest)
 ///
 /// This view mutates only local UI mirrors before forwarding user intent through
 /// callbacks. Progress-bar styling mirrors SessionStatusView (which stays the
@@ -145,10 +145,10 @@ struct PopoverFooter: View {
     private var codexBar: some View {
         switch model.codexUsageState {
         case .available(let info):
+            // Only the primary window belongs at a glance; the second one is
+            // detail, and detail lives in the dashboard — same split as Claude,
+            // whose weekly row is a dashboard row too.
             codexUsageBar(info.primary, isStale: info.isStale)
-            if let secondary = info.secondary {
-                codexUsageBar(secondary, isStale: info.isStale)
-            }
         case .unavailable, .error:
             usageBar(name: "Codex", window: "account quota", progress: nil, percentLabel: "—", trailing: nil)
         }
