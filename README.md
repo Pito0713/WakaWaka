@@ -19,10 +19,11 @@ WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依�
 | -------------------- | -------------------------------------------------------------------------------------------------------- |
 | **Active Agents 面板** | popover 底部列出現在活著的 agent session：專案、branch、狀態、正在跑的工具或 skill。以 pid 判定存活而非時間新舊，崩潰的 session 會消失而不是繼續顯示。點一列即切換到該 agent 的終端機視窗；旁邊的刷新鈕強制重新檢查所有行程 |
 | **懸浮 Agent HUD**   | 把上面那份清單拉出 popover：常駐置頂、不搶焦點的小視窗，不必點 menu bar 就知道誰在跑、誰卡住。`NSPanel` + `.nonactivatingPanel`，點一列直接跳該 agent 的終端機而不會先把焦點搶過來；位置與可見狀態記在偏好設定 |
+| **上下文視窗計量**   | ACTIVE AGENTS 每列顯示該 session 的上下文佔用率，≥85% 長出一行警示。量的是最後一輪的 input 對上模型視窗，不是累計消耗；Codex 自報 `model_context_window`，Claude Code 的分母來自 `pricing.json`，表裡沒有的模型不畫 meter |
 | **三層風險分類**     | CRITICAL → HIGH → MEDIUM；各 agent adapter 採 fail-closed 策略，Codex 的 CRITICAL shell 操作會立即拒絕 |
 | **Auto 模式**        | per-agent 開關；開啟後自動放行白名單 MEDIUM（Edit/Write/MultiEdit + 未知 bash），HIGH/CRITICAL 與 MCP 仍彈窗；常駐開啟直到手動關閉 + fail-closed 稽核（`~/.wakawaka/auto-audit.jsonl`） |
 | **多代理支援**       | 同時守護 Claude Code 與 Codex，agent badge 顯示工具呼叫來源                                               |
-| **Codex Usage**      | 從本機 Codex session 資料彙整 5h 與 weekly 用量，獨立於 Claude Code usage 顯示                            |
+| **Codex Usage**      | 從本機 Codex session 檔彙整 5h 與 weekly 兩個窗口，各自以 `window_minutes` 標名，獨立於 Claude Code usage 顯示。這是本機快照而非即時查詢：過期時顯示 `Snapshot expired`，footer 標 stale，tooltip 附快照時間 |
 | **Token 用量追蹤**   | 從 `~/.claude/projects/` JSONL 解析，全域合併去重，誤差 < 3%                                             |
 | **Server 驗證用量**  | `claude -p "/usage"` 每 10 分鐘校正一次，進度條旁綠點表示資料已驗證                                      |
 | **5h 配額進度條**    | 對應 Claude 實際 rate limit 窗口，含重置倒數計時                                                         |
@@ -99,7 +100,7 @@ cost-aware-approval/
 ├── parser/
 │   ├── usage-calculator.ts     # Token 用量計算（兩遍掃描 + global dedup）
 │   ├── p90-detector.ts         # 歷史 peak 分析 → 方案上限自動估算
-│   └── pricing.json            # Anthropic 定價表（手動維護）
+│   └── pricing.json            # 定價與 context window 表（手動維護，OpenAI 側為等值 API 估算）
 └── app/WakaWaka/
     └── Sources/WakaWaka/
         ├── AppDelegate.swift       # 主控：1s 輪詢 + 60s session 刷新 + 10m /usage 校正
@@ -108,6 +109,12 @@ cost-aware-approval/
         ├── AgentRegistryService.swift # registry 讀取、pid 驗證、崩潰殘留清理
         ├── ActiveAgentsView.swift  # ACTIVE AGENTS 面板（popover 底部、控制列之下）
         ├── AgentWindowFocus.swift  # 點擊列 → 跳到該 agent 的終端機（tmux 原 session / Terminal.app）
+        ├── ContextMeter.swift       # 上下文佔用 meter：顏色帶由畫面上的百分比決定，不由原始分數
+        ├── ContextUsageService.swift # 5s 背景時鐘讀 transcript 尾端，size/mtime 沒變不重讀
+        ├── ContextWindows.swift     # 模型 → context window 查表（pricing.json），查不到就不畫 meter
+        ├── ClaudeTranscriptReader.swift # 最後一則非 sidechain assistant 的 usage（含 cached）
+        ├── TranscriptTailReader.swift   # 檔尾讀取：視窗逐級放大、O_NONBLOCK + fstat 擋 fifo
+        ├── SessionTokens.swift      # 上下文佔用模型與 70/85 警示門檻（提案值）
         ├── FloatingAgentsPanel.swift    # 懸浮 HUD 的視窗控制：NSPanel、位置記憶、螢幕拔除時 clamp
         ├── FloatingAgentsView.swift     # 懸浮 HUD 內容（含 degraded 與 focus 失敗列）
         ├── FloatingAgentRow.swift       # 懸浮 HUD 單列
@@ -397,6 +404,42 @@ P90 偵測在以下情況會有大誤差：
 ## Changelog
 
 版本格式：`v主版本.功能版本.修補版本`，遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/) 規範。
+
+---
+
+### v0.21.0 — 2026-09-02
+
+Session 上下文視窗計量，以及 Codex 額度顯示的兩個根因修正。前者對應 `session-token-plan.md` 的四個階段，該文件的檔頭直到刪除前都還寫著「草案」，實際上四個階段都已出貨。
+
+本版一併刪除六份計劃書：`session-token-plan.md`、`active-agents-plan.md`、`floating-agents-panel-plan.md`、`phase-usage-plan.md`、`usage-dashboard-plan.md`、`claude-code-dev-plan.md`，全部已實作並驗收。v0.20.0 當時保留它們的理由是 `session-token-plan.md` 把其中幾份列為前置——那份計劃自己完成之後，理由就消失了。內容留在 git 歷史；原始碼註解與更早的 changelog 條目仍以檔名與章節號引用它們，`git show <rev>:<file>` 可取回。
+
+#### Added
+
+- **Session 上下文佔用計量**（`ContextMeter` / `ContextUsageService` / `ContextWindows` / `ClaudeTranscriptReader` / `TranscriptTailReader` / `SessionTokens`）：ACTIVE AGENTS 每一列顯示該 session 的上下文佔用率。面板原本能回答「誰活著、在做什麼」，回答不了「還剩多少空間」——而那個答案通常在 auto-compaction 觸發時才到，那時候「要不要收尾」已經不是選擇題。
+- **量的是最後一輪的 input 對上模型視窗，不是累計消耗**。有快取時兩者差一個數量級：實測一輪讀進 228,495 cached、2 uncached。累計數字回答「這個 session 花了多少錢」，對「還剩多少空間」一個字都沒說；用它驅動 meter 會在每個長、便宜、快取命中率高的 session 上誤報。
+- **Codex 自報分母，Claude Code 靠外部表**。Codex 的 `token_count` 事件裡就有 `model_context_window`（`CodexUsageService` 本來就在解析這個事件，只是把這半丟掉）；Claude Code 的 transcript 掃過所有頂層欄位都沒有任何欄位說明視窗多大，分母改由 `pricing.json` 的 `contextWindow` 提供。**表裡沒有的模型不畫 meter**：Claude Opus 5 是 1M 而不是直覺的 200K，猜 200K 會把一個健康的 229K session 畫成 114%，而畫面上沒有任何東西能讓使用者分辨「分母錯了」與「真的快滿了」。
+- **≥85% 長出一行警示**，寫明數字與該做什麼。一條安靜轉紅的 bar 在「用瞄的」而不是「用讀的」面板上很容易錯過。那行字會改變 popover 高度，所以寫在列裡、並在 usage 變動時重新量測——設了卻不重算，會把那行「存在就是為了被讀」的字自己裁掉（`PopoverLayoutTests` 就是為這個缺陷而存在）。HUD 不放那行：300pt 放不下句子，顏色就是螢幕上的全部訊號，文字進 tooltip；HUD 的量測反向釘住——meter 不得改變 HUD 高度，否則清單會在游標底下重排。
+- **兩處 tooltip 都寫出分子與分母**（`187,432 / 1,000,000`）。百分比再精確也只值那張手工維護的表，寫出分母才讓人有機會發現分母是錯的。
+- **70 / 85 門檻是提案值**，以常數命名並在註解裡說明：一個門檻值多少，取決於它能在 auto-compaction 前提早多久示警，而那個觸發點還沒被量過。
+- **sidechain 行排除**：sub-agent 把自己的回合寫進父 session 的 transcript，usage 是對它自己的視窗量的；忙碌 session 的最後一行很常是它們的，計進去等於把 sub-agent 的整個視窗算到 spawner 頭上。
+- **讀取不併入 registry 的 1 秒輪詢**。那個輪詢跑在主執行緒，每列一次 transcript 讀取等於把 file I/O 排在每一次點擊前面。上下文讀取自帶 5 秒背景時鐘，size / mtime 沒變就跳過。
+- **`transcriptPath` 由 hook 寫進 registry，不在 app 端用 cwd → slug 規則重建**。那條規則是 Claude Code 的內部約定，複製一份會一路正確到它改版為止，然後以「找不到檔案」的形式失效——與「還沒有資料」在畫面上完全同形。這是唯一一個會被拿去開檔而不是拿去畫面的 registry 欄位，因此是驗證而非消毒：絕對路徑、長度有界、無控制字元、爬不出兩個允許的根目錄，且不會被一個根本沒提到它的 payload 覆蓋掉。
+- **Codex 週用量重新顯示於儀表板**：解析 `secondary` 窗口（見下方 Changed）。
+
+#### Changed
+
+- **Auto 模式不再 30 分鐘自動關閉**，開了就常駐到手動關掉。讓它安全的從來不是那個時鐘，是風險閘：HIGH / CRITICAL 根本不會走到 auto 分支，只有白名單 MEDIUM 會，MCP 與未分類工具仍然找人，稽核寫入失敗則退回人工審批——這些與視窗開多久無關。`expiresAt` 改寫 `null`（hook 端本來就讀成「無期限」，共用契約不需改動）；30 秒 sweep 保留，舊版 binary 寫下的真期限仍會依約被回收。TTL 倒數以 `expiresAt` 存在與否為條件，自己就消失了。
+- **Codex 的兩個額度窗口各自以 `window_minutes` 標名**，不再從欄位名推斷語意。2026-08-26 Codex 換了 wire format：`primary` 從 7 天窗口變成 5 小時窗口，週用量搬到 `secondary`——那天之後，app 一直靜靜隱藏著真正卡住 Plus 帳號一整週的那個數字。改法讓 08-26 之前的檔案渲染結果完全不變，下一次改名也不會標錯。無效或重複的 `secondary` 單獨丟棄，不會把 primary 一起拖下水。`CodexUsageInfo` 隨之拆成 `CodexWindowUsage`（單一窗口的讀數）加上快照時間。
+- **footer 只畫 primary 窗口**，第二個窗口留在儀表板。footer 的前提是「瞄一眼」，三條 bar 不是瞄一眼；Claude 早就照這條線走（5h 在 footer、weekly 在儀表板），Codex 現在對齊。解析什麼都沒變，週用量照讀照顯示，只是往下一層。
+- **README 不再把 agy 列為受守護的 agent**。它所描述的 hook 從未安裝（`~/.gemini/config/hooks.json` 不存在），那段文字寫的是意圖而不是程式。歷史 changelog 與確實存在的 agy quota 程式碼原樣保留。
+- **`pricing.json` 收錄 OpenAI GPT-5.6 Sol 促銷價**（input 4 / cached input 0.4 / output 20 / cache write 5 USD per MTok，至少到 2026-11-21），註記改為明說這是等值 API 估算，不是訂閱帳單。
+- **紅色呼吸 urgent 圖示正式取消**，`IconUrgencyOverlay.swift` 隨之移除。其餘 urgency 行為全部保留：8 分鐘警告、popover 紅色倒數、系統通知、9m50s 自動拒絕。
+
+#### Fixed
+
+- **過期的本機快照不再冒充即時額度**。Codex 額度從來不是即時查詢，而是這台機器 `~/.codex/sessions` 底下最新那行 `token_count` 記到的東西，兩個 bug 都源自把快照當成 feed：重置時間一旦過去，每個 formatter 都掉進「Resetting…」分支——一個本該轉瞬即逝的狀態就此永駐，一台五天沒跑 Codex 的機器上，footer、狀態列與儀表板會無限期停在那裡，旁邊還配著同一筆死讀數算出來的百分比。現在過期的快照直說 `Snapshot expired`，footer 標記讀數為 stale（旁邊的 Claude bar 早就這麼做），tooltip 顯示快照時間——同一個帳號的兩台機器數字對不上，原因正是各自持有各自的快照，只有在本機跑一次 Codex 才會刷新。
+- **transcript 讀取器對它要讀的檔案加固**（冷啟審查五條，四條打得到真實檔案而非惡意檔案）：固定 64KB 尾窗會在最需要 meter 的 session 上整個讀不到——一則 assistant 行帶著完整訊息，一段長 code block 就超過視窗，而被截斷的首行必須丟棄，於是視窗小於最後一行時什麼都不剩，空結果還被快取到檔案下次變動為止；現在依 64KB → 512KB → 4MB 逐級放大，一有行能解析或視窗已到檔頭就停，一般情況仍然只讀一次。三個 token 欄位直接用 `+` 相加會 overflow trap，一個壞掉的 transcript 足以帶走整個 app；改為各自先設界（選擇拒絕而不是 clamp：一億 token 不是一個上下文，clamp 只會從胡言亂語裡畫出一條很有自信的 bar）。路徑檢查原本接受字串中任何位置的 `/.claude/`，任何目錄都能滿足，現在錨定到本使用者的家目錄。檢查路徑與開啟路徑之間的空窗收斂到 descriptor 上：`O_NONBLOCK` 開檔讓中途換上的 fifo 卡不住執行緒，`fstat` 檢查的是真正握在手上的 handle 而不是片刻前那個路徑的含義。usage 快取只以檔案為鍵，於是一列在拿到「提供分母的 model」之後、檔案卻沒變動時，會繼續拿到快取住的「沒有 meter」；鍵現在帶上 path、kind 與 model。5 秒掃描補上手動刷新早就有的 generation 守衛，讓慢的那一趟不能落在新的那一趟後面、把 meter 往回推。每條修正都有一個先對著未修正的程式碼看它變紅的測試。
+- **context window 查表規則只留一份**。出貨路徑與測試接縫各自寫了一次「先試 id，再試加上 `claude-` 前綴」——兩份規則就是兩條規則：測試練的是接縫那份，真正在跑的那份從未被覆蓋，任一份都能無聲漂移。出貨路徑現在委派給接縫，弄壞那條唯一的規則會讓兩個入口共三個測試轉紅。
 
 ---
 
