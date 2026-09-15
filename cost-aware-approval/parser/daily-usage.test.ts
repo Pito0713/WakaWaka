@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { computeDailyUsage, type DailyUsageOptions } from './daily-usage.js';
+import { loadPricing, round4 } from './pricing.js';
 
 // Fixed "now" so the 7-day axis is deterministic: 2026-07-18 … 2026-07-24.
 // Fixture timestamps use NOON UTC so a ±12h timezone shift never flips the day.
@@ -179,8 +180,18 @@ test('Codex: estimates cost using uncached, cached, and output prices', async ()
     [codexLine({ ts: '2026-07-23T12:00:00Z', input: 1000, cached: 600, output: 50, reasoning: 0 })]
   );
   const day = findDay(await computeDailyUsage(7, ws), '2026-07-23')!;
-  // 400 uncached × $5/MTok + 600 cached × $0.50/MTok + 50 output × $30/MTok
-  assert.equal(day.agents.codex!.costUSD, 0.0038);
+  // Rates come from pricing.json rather than literals: Codex runs on dated
+  // promotional prices, and a hardcoded rate breaks this test every time they
+  // change without saying anything about the arithmetic.
+  const codexPricing = loadPricing().codex;
+  assert.ok(codexPricing, 'pricing.json must price Codex for this test to mean anything');
+  // 400 uncached × input + 600 cached × cached input + 50 output × output
+  const expected = round4(
+    (400 * codexPricing.inputPerMTok
+      + 600 * codexPricing.cachedInputPerMTok
+      + 50 * codexPricing.outputPerMTok) / 1_000_000,
+  );
+  assert.equal(day.agents.codex!.costUSD, expected);
   fs.rmSync(ws.dir, { recursive: true, force: true });
 });
 
