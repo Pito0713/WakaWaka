@@ -10,7 +10,11 @@
  *   User allowlist     — ~/.wakawaka/allowlist.json  (user-managed MEDIUM bypasses)
  *   Chrome MCP         — auto mode only: read-only verb + loopback target (see
  *                        isReadOnlyLoopbackChromeCall); all other MCP needs a human
- *   HIGH / CRITICAL    — always show popover (HIGH) or deny immediately (CRITICAL)
+ *   HIGH / CRITICAL    — always show the popover; CRITICAL with a red banner
+ *
+ * Under Claude Code's own auto mode (permission_mode "auto") none of the above
+ * runs: its classifier reviews the call, and only CRITICAL still reaches the
+ * popover. See handleNativeAutoMode.
  *
  * Tombstone mechanism (fixes "not showing / can't click" bug):
  *   When the hook exits without receiving a decision (timeout or Claude Code kill),
@@ -223,6 +227,23 @@ function loadAutoMode(agent) {
   } catch {
     return false;
   }
+}
+
+// ── Claude Code's own auto mode ──────────────────────────────────────────────
+// With permission_mode "auto", a classifier that reads the conversation reviews
+// each call. Any allow from this hook would either repeat that review or
+// pre-empt it with a first-token regex — the safe prefixes, the user allowlist
+// and WakaWaka's own auto mode are exactly the broad allow rules Claude Code
+// drops when it enters auto mode — so this hook approves nothing here and hands
+// HIGH over too. CRITICAL is the exception: the user wants to decide those
+// personally, so it returns without deciding and the call takes the normal
+// popover path. Otherwise exits the process whenever the mode is auto.
+function handleNativeAutoMode(permission_mode, tool_name, tool_input) {
+  if (permission_mode !== 'auto') return;
+  if (tool_name === 'Bash' && assessBashRisk(tool_input?.command) === 'critical') return;
+
+  decide('defer', 'Claude Code auto mode reviews this call');
+  process.exit(0);
 }
 
 // Only these tool categories may be auto-approved. MCP tools (mcp__*) and any
@@ -470,7 +491,10 @@ async function main() {
   // directory that hangs takes approvals down whether or not this line runs.
   try { recordToolUse(input); } catch { /* the panel is cosmetic; approvals are not */ }
 
-  const { session_id: rawSid, tool_name, tool_input, transcript_path } = input ?? {};
+  const { session_id: rawSid, tool_name, tool_input, transcript_path, permission_mode } = input ?? {};
+
+  // ── Step 0: Claude Code's auto mode reviews the call itself ─────────────
+  handleNativeAutoMode(permission_mode, tool_name, tool_input);
 
   // Sanitize session_id — prevent path traversal
   const sanitized  = typeof rawSid === 'string' ? rawSid.replace(/[^a-zA-Z0-9_-]/g, '_') : '';

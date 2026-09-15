@@ -21,7 +21,7 @@ WakaWaka 透過各 agent 的 **PreToolUse hook** 攔截本機工具呼叫，依�
 | **懸浮 Agent HUD**   | 把上面那份清單拉出 popover：常駐置頂、不搶焦點的小視窗，不必點 menu bar 就知道誰在跑、誰卡住。`NSPanel` + `.nonactivatingPanel`，點一列直接跳該 agent 的終端機而不會先把焦點搶過來；位置與可見狀態記在偏好設定 |
 | **上下文視窗計量**   | ACTIVE AGENTS 每列顯示該 session 的上下文佔用率，≥85% 長出一行警示。量的是最後一輪的 input 對上模型視窗，不是累計消耗；Codex 自報 `model_context_window`，Claude Code 的分母來自 `pricing.json`，表裡沒有的模型不畫 meter |
 | **三層風險分類**     | CRITICAL → HIGH → MEDIUM；各 agent adapter 採 fail-closed 策略，Codex 的 CRITICAL shell 操作會立即拒絕 |
-| **Auto 模式**        | per-agent 開關；開啟後自動放行白名單 MEDIUM（Edit/Write/MultiEdit + 未知 bash），HIGH/CRITICAL 與 MCP 仍彈窗；常駐開啟直到手動關閉 + fail-closed 稽核（`~/.wakawaka/auto-audit.jsonl`） |
+| **Auto 模式**        | per-agent 開關；開啟後自動放行白名單 MEDIUM（Edit/Write/MultiEdit + 未知 bash），HIGH/CRITICAL 與 MCP 仍彈窗；常駐開啟直到手動關閉 + fail-closed 稽核（`~/.wakawaka/auto-audit.jsonl`）。Claude Code 自己的 auto mode 開著時此開關不作用，改由其分類器審查，只有 CRITICAL 仍彈窗由人決定（見[風險分類說明](#claude-code)） |
 | **多代理支援**       | 同時守護 Claude Code 與 Codex，agent badge 顯示工具呼叫來源                                               |
 | **Codex Usage**      | 從本機 Codex session 檔彙整 5h 與 weekly 兩個窗口，各自以 `window_minutes` 標名，獨立於 Claude Code usage 顯示。這是本機快照而非即時查詢：過期時顯示 `Snapshot expired`，footer 標 stale，tooltip 附快照時間 |
 | **Token 用量追蹤**   | 從 `~/.claude/projects/` JSONL 解析，全域合併去重，誤差 < 3%                                             |
@@ -314,6 +314,16 @@ Codex 的安全 read command 僅限無 pipe、redirect、command substitution �
 ### Claude Code
 
 Claude Code 使用相同三層名稱，但 adapter 的最終處置可能與 Codex 不同；例如部分 CRITICAL 操作會保留人工最終決定。修改政策時應同步更新 hook 的 regression tests，不要從 Codex 表格推論 Claude Code 的行為。
+
+**Claude Code 自己的 auto mode 開著時，hook 只保留 CRITICAL 的彈窗。** hook 從輸入的 `permission_mode` 得知目前模式；值為 `auto` 時，Claude Code 的分類器會帶著對話上下文審每一個呼叫，hook 回的任何 `allow` 不是重複那次審查，就是用第一個 token 的比對搶在它前面——safe prefix、使用者 allowlist、WakaWaka 自己的 Auto 模式，正是 Claude Code 進入 auto mode 時會丟掉的那種寬 allow 規則。
+
+| 等級 | `permission_mode: "auto"` 時 | 其他模式 |
+| ---- | ---------------------------- | -------- |
+| **CRITICAL** | 彈窗（紅色 banner），人工決定 | 彈窗（紅色 banner），人工決定 |
+| **HIGH** | `defer`，交給 Claude Code 分類器 | 彈窗，人工決定 |
+| **MEDIUM / 唯讀工具 / allowlist / Auto 模式** | `defer`，交給 Claude Code 分類器；不寫 auto-audit | 照上表放行或彈窗 |
+
+CRITICAL 例外，是因為這一級的指令使用者要親自決定，不交給分類器。代價是 auto mode 下沒人盯著 popover 時，agent 會卡到 9m50s 逾時後被拒絕；WakaWaka 沒在跑時則照原本的退路交還 Claude Code（`defer`），由分類器審。`plan` 在 auto mode 可用時也會經過分類器，但 hook 看不出「可用」與否，因此維持原行為。
 
 ---
 
