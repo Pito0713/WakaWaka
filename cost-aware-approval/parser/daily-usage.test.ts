@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { computeDailyUsage, type DailyUsageOptions } from './daily-usage.js';
-import { loadPricing, round4 } from './pricing.js';
+import { claudeModelPricing, loadPricing, round4 } from './pricing.js';
 
 // Fixed "now" so the 7-day axis is deterministic: 2026-07-18 … 2026-07-24.
 // Fixture timestamps use NOON UTC so a ±12h timezone shift never flips the day.
@@ -207,8 +207,17 @@ test('Claude: costUSD uses the row\'s own model price, not a fixed default', asy
   );
   const result = await computeDailyUsage(7, ws);
   const day = findDay(result, '2026-07-23')!;
-  // 1M input × $5/MTok (Opus 5) = $5.00 — the old code charged Sonnet's $3.
-  assert.equal(day.agents['claude-code']!.costUSD, 5);
+  // Rates come from pricing.json, on the fixture's own date so dated `after`
+  // entries resolve the same way the parser resolves them.
+  const table = loadPricing();
+  const opus = claudeModelPricing(table, 'claude-opus-5', '2026-07-23');
+  const sonnet = claudeModelPricing(table, 'claude-sonnet-4-6', '2026-07-23');
+  assert.ok(opus && sonnet, 'pricing.json must price both models for this test to mean anything');
+  // The claim is "the row's own price", so the two rates have to differ —
+  // otherwise this passes no matter which one the parser charged.
+  assert.notEqual(opus.inputPerMTok, sonnet.inputPerMTok);
+  // 1M input × Opus 5's input rate — the old code charged Sonnet's.
+  assert.equal(day.agents['claude-code']!.costUSD, round4(opus.inputPerMTok));
   assert.equal(result.pricing.pricedCalls, 1);
   assert.equal(result.pricing.totalCalls, 1);
   assert.deepEqual(result.pricing.unpricedModels, []);
