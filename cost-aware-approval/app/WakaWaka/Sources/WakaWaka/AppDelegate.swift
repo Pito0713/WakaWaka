@@ -972,6 +972,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         agentScanGeneration += 1
         let generation = agentScanGeneration
         let pending = pendingQueue
+        let startedAt = Date()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let stateDir = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".wakawaka/state")
@@ -989,7 +990,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.viewModel.isRefreshingAgents = false
+                // The scan is faster than the spin it triggers, so the flag is
+                // lowered on a floor rather than on completion — otherwise the
+                // icon never visibly turns and the click reads as ignored. It
+                // is lowered whether or not this result is still current: the
+                // button must not stay disabled because a newer scan won.
+                let remaining = RefreshSpin.remaining(after: Date().timeIntervalSince(startedAt))
+                if remaining > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
+                        self?.viewModel.isRefreshingAgents = false
+                    }
+                } else {
+                    self.viewModel.isRefreshingAgents = false
+                }
                 guard generation == self.agentScanGeneration else { return }
                 if snapshot != self.viewModel.activeAgents {
                     self.viewModel.activeAgents = snapshot

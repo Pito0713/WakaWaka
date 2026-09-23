@@ -1,5 +1,24 @@
 import SwiftUI
 
+/// Timing for the refresh button's spin, shared with whoever drives
+/// `isRefreshing` so the two numbers cannot drift apart.
+enum RefreshSpin {
+    /// One full turn of the icon.
+    static let turnDuration: TimeInterval = 0.8
+
+    /// How much longer the spin must run to be seen at all.
+    ///
+    /// A forced re-scan is a directory read and a handful of pid checks, so it
+    /// usually finishes within a frame — the flag goes back down before the
+    /// animation has drawn anything, and the button looks dead. Holding it for
+    /// one whole turn is the difference between "it refreshed" and "my click
+    /// did nothing". The floor is on the spin only; the new rows are published
+    /// the moment the scan returns.
+    static func remaining(after elapsed: TimeInterval) -> TimeInterval {
+        max(0, turnDuration - elapsed)
+    }
+}
+
 /// The ACTIVE AGENTS panel, pinned to the bottom of the popover.
 ///
 /// Every value here comes from a hook event or a pid check, so nothing is
@@ -10,8 +29,6 @@ import SwiftUI
 /// not nothing: a status message is shown even with no rows, because a silent
 /// empty panel is indistinguishable from a working one.
 struct ActiveAgentsView: View {
-    @State private var refreshRotation = 0.0
-
     let snapshot: ActiveAgentsSnapshot
     /// Bring this agent's terminal to the front. Defaults to nothing so the
     /// layout tests can build the view without a host.
@@ -103,29 +120,29 @@ struct ActiveAgentsView: View {
             Image(systemName: "arrow.clockwise")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(refreshRotation))
+                .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                // The spin is tied to the work, not to a duration guessed here:
+                // a forced refresh verifies every process, so it can outlast
+                // any fixed animation — and a button that is disabled and
+                // motionless reads as a hung panel, which is the opposite of
+                // what this button is for.
+                //
+                // The angle is driven by `isRefreshing` itself, so stopping is
+                // a value change SwiftUI can see. Animating a separate rotation
+                // accumulator did not stop: the wind-down assigned the turn the
+                // accumulator had already reached, and a state change to the
+                // value it already holds starts no transaction — so nothing
+                // ever replaced the repeatForever animation and the icon spun
+                // on for the life of the popover.
+                .animation(isRefreshing
+                           ? .linear(duration: RefreshSpin.turnDuration).repeatForever(autoreverses: false)
+                           : .linear(duration: 0.2),
+                           value: isRefreshing)
         }
         .buttonStyle(.plain)
         .disabled(isRefreshing)
         .help("重新檢查所有 agent 是否還活著")
         .accessibilityLabel("重新檢查所有 agent 是否還活著")
-        // The spin is tied to the work, not to a duration guessed here: a
-        // forced refresh verifies every process, so it can outlast any fixed
-        // animation — and a button that is disabled and motionless reads as a
-        // hung panel, which is the opposite of what this button is for.
-        .onChange(of: isRefreshing) { _, isSpinning in
-            if isSpinning {
-                withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
-                    refreshRotation += 360
-                }
-            } else {
-                // Landing on the next whole turn ends the loop where the icon
-                // already is; assigning 0 would snap it backwards instead.
-                withAnimation(.linear(duration: 0.2)) {
-                    refreshRotation = (refreshRotation / 360).rounded(.up) * 360
-                }
-            }
-        }
     }
 
     private func overflowNote(_ count: Int) -> some View {
