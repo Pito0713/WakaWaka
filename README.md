@@ -417,6 +417,24 @@ P90 偵測在以下情況會有大誤差：
 
 ---
 
+### v0.22.0 — 2026-09-23
+
+Claude Code 自己的 auto mode 開著時，審批權交給它的分類器，只有 CRITICAL 還留在 WakaWaka 手上；外加 ACTIVE AGENTS refresh icon 的旋轉修正，與兩個把價格寫死的測試。
+
+#### Changed
+
+- **`permission_mode: "auto"` 時，hook 不再自己放行任何呼叫**。那個模式下有一個讀得到對話上下文的分類器在審每一次工具呼叫，而 hook 答得比它早：唯讀工具、安全前綴、使用者 allowlist、WakaWaka 自己的 Auto 模式，四條路都是比對第一個 token 就回 `allow`——`cd /tmp && rm -rf ./project` 因為開頭是 `cd` 而被放行，分類器連看都沒看到。這些正是 Claude Code 進入 auto mode 時會丟掉的寬鬆規則，由 hook 從旁邊加回去，等於把該模式的審查拆掉一半。現在一律 `defer`，也不寫 auto-audit——沒有放行，就沒有放行紀錄。
+- **CRITICAL 仍走 popover**，由使用者親自決定，不交給分類器也不直接拒絕。代價寫明在此：auto mode 下沒人盯著 popover 時，那次呼叫會卡到 9m50s 逾時後被拒。WakaWaka 沒在跑時則照其他模式的退路 `defer`，與「app 死了不該把 agent 鎖死」一致。
+- 其餘 permission mode（default / acceptEdits / plan / dontAsk / bypassPermissions / 欄位不存在）行為完全不變，各有測試釘住。`plan` 在 auto mode 可用時也會經過分類器，但 hook 看不出「可用」與否，維持原行為。
+
+#### Fixed
+
+- **ACTIVE AGENTS 的 refresh icon 轉個不停**。停止那段算的是 `(refreshRotation / 360).rounded(.up) * 360`，而 `refreshRotation` 永遠已經是 360 的整數倍——算出來就是它自己。把 state 設成它已經持有的值不會開啟任何 transaction，於是沒有任何東西去取代那個 `repeatForever`，icon 一路轉到 popover 關閉。角度改為直接由 `isRefreshing` 驅動（`isRefreshing ? 360 : 0`），停止因此是一次真正的值變化；`SessionStatusView` 與 `PopoverFooter` 的兩顆 refresh 早就是這個寫法。代價是收尾改成 0.2 秒倒轉回原點，不再停在下一個整圈。
+- **接著暴露出第二個缺陷：那顆 icon 其實一次都沒有正確轉過**。強制重掃是一次目錄讀取加幾個 pid 檢查，往往在一幀之內就結束，旗標在動畫畫出東西之前就被放下——上一個 bug 讓它看起來會轉，修掉之後才看得出來它根本不轉，而一顆按下去毫無反應的按鈕，正是這顆按鈕存在的反面。旋轉因此改為有下限：至少轉滿一圈（`RefreshSpin.turnDuration`，0.8 秒）才放下旗標。**下限只加在動畫上**，掃描結果一回來就立刻發佈；旗標無論該結果是否已被更新的掃描取代都會放下，按鈕不會卡在 disabled。
+- **兩個測試把會變動的價格寫死**。Codex 那個從 `2f9ae3b` 改用 GPT-5.6 Sol 促銷價（2026-08-26）之後就一直是紅的，它覆蓋的程式碼一直是對的，而那次紅燈沒人看到——當時的交接只記了 Swift 與 hook 兩組全過，parser 這組沒跑。兩個測試改為從 `pricing.json` 取價，Claude 那個並帶上 fixture 自己的日期，讓 `after` 這種「某日起換價」的設定以 parser 相同的方式解析。斷言的力道沒有變弱：Codex 那個仍要求三類 token 各自乘對欄位（cached 誤用未快取價是十倍差距），Claude 那個新增一條「Opus 與 Sonnet 的價格必須不同」，否則不論 parser 用了哪個價格它都會過。
+
+---
+
 ### v0.21.0 — 2026-09-02
 
 Session 上下文視窗計量，以及 Codex 額度顯示的兩個根因修正。前者對應 `session-token-plan.md` 的四個階段，該文件的檔頭直到刪除前都還寫著「草案」，實際上四個階段都已出貨。
