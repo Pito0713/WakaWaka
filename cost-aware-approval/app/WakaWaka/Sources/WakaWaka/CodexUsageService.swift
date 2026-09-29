@@ -2,7 +2,6 @@ import Foundation
 
 enum CodexUsageService {
     private static let maximumFileCount = 20
-    private static let maximumFileBytes: UInt64 = 50_000_000
     private static let maximumReadBytes: UInt64 = 4_000_000
     private static let maximumTotalReadBytes: UInt64 = 20_000_000
     private static let maximumFutureDrift: TimeInterval = 300
@@ -198,13 +197,18 @@ enum CodexUsageService {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
 
+    /// Reading is bounded by the tail seek, never by the file's size: a rollout
+    /// costs the same 4 MB read whether it is 4 MB or 400 MB. A size cap here
+    /// would therefore buy nothing and cost everything — the session generating
+    /// the most events is both the largest file and the only one whose quota
+    /// snapshot is current, so capping blinds the meter to the live session and
+    /// pins it to a days-old reading that no refresh can clear.
     private static func scanFile(_ file: URL, root: URL, result: inout ScanResult) {
         guard isSafeCandidate(file, root: root) else { return }
         do {
             let handle = try FileHandle(forReadingFrom: file)
             defer { try? handle.close() }
             let size = try handle.seekToEnd()
-            guard size <= maximumFileBytes else { return }
             let allowance = min(maximumReadBytes, maximumTotalReadBytes - result.bytesRead)
             let readCount = min(size, allowance)
             try handle.seek(toOffset: size - readCount)

@@ -201,17 +201,23 @@ struct CodexUsageServiceTests {
         #expect(CodexUsageService.load(from: directory) == .unavailable)
     }
 
-    @Test func skipsOversizedFile() throws {
+    /// A long-running Codex session is the largest rollout on disk *and* the only
+    /// one still emitting quota snapshots. Skipping it on size pinned the meter to
+    /// a days-old reading from a finished session that no refresh could clear.
+    @Test func readsSnapshotFromOversizedFile() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let file = directory.appendingPathComponent("oversized.jsonl")
         FileManager.default.createFile(atPath: file.path, contents: nil)
         let handle = try FileHandle(forWritingTo: file)
-        try handle.truncate(atOffset: 50_000_001)
+        // Sparse padding — these bytes are only ever seeked past, never read.
+        try handle.truncate(atOffset: 60_000_000)
+        _ = try handle.seekToEnd()
+        try handle.write(contentsOf: Data("\n\(event(percent: 16, timestamp: timestamp(secondsAgo: 60)))\n".utf8))
         try handle.close()
 
-        #expect(CodexUsageService.load(from: directory) == .unavailable)
+        #expect(try availableInfo(CodexUsageService.load(from: directory)).primary.usedPercent == 16)
     }
 
     @Test func rejectsFutureTimestampAndInvalidBoundaries() {

@@ -417,6 +417,20 @@ P90 偵測在以下情況會有大誤差：
 
 ---
 
+### v0.22.1 — 2026-09-29
+
+Codex 額度條凍結在一個過期數字上，任何 refresh 都清不掉。根因是一條防護把唯一還在更新的 session 擋在外面。
+
+#### Fixed
+
+- **Codex 額度條不隨 refresh 更新**。`CodexUsageService` 有一條 `maximumFileBytes = 50_000_000` 的上限，`scanFile` 一看到超過就整個檔案跳過。問題在於事件最多的 session 同時是最大的檔案，也是唯一還在寫入 quota snapshot 的那個——實測時它是 87MB，於是掃描永遠落到一個 9 小時前、來自已結束 session 的 96% 讀數，畫面標成 `stale` / `Snapshot expired` 並且**任何 refresh 都得到同一個答案**，按鈕看起來像壞了。拿掉上限之後同一份資料掃出來是即時的 31%。這條上限本來也買不到東西：`scanFile` 早就只 `seek` 到檔尾讀最後 4MB（`maximumReadBytes`），讀取成本與檔案大小無關，總量另有 `maximumTotalReadBytes` 把關。原測試 `skipsOversizedFile` 把「跳過大檔」當成規格釘住，改為 `readsSnapshotFromOversizedFile`：建一個 60MB 稀疏檔、只在檔尾寫一筆 snapshot，斷言仍然讀得到。
+
+#### Changed
+
+- **`runClaudeUsage` 的四條失敗路徑不再靜默**。找不到 `claude`、launch 失敗、輸出解不出 session %，原本全部 `return nil`，Console 一個字都沒有——同檔案的 `runScript` 早就會把 stderr 印出來，只有這條沒有。這次查 Codex 的問題時，Claude 那條同時顯示 0%，要排除它是不是也壞了花掉的時間全在這個空白上。現在各自記一行，解析失敗時一併帶上 exit code 與 stdout/stderr 摘要（各截 300 字，換行壓成 `⏎` 保持單行）。**行為沒有改變**：回傳仍然只由解析成敗決定，非零 exit 不新增為失敗條件。
+
+---
+
 ### v0.22.0 — 2026-09-23
 
 Claude Code 自己的 auto mode 開著時，審批權交給它的分類器，只有 CRITICAL 還留在 WakaWaka 手上；外加 ACTIVE AGENTS refresh icon 的旋轉修正，與兩個把價格寫死的測試。

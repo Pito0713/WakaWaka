@@ -144,7 +144,10 @@ enum ParserRunner {
     /// Runs `claude -p "/usage"` and parses the output for server-side session % and reset time.
     /// Blocks up to 15 s. Returns nil if the binary is not found or output is unparseable.
     static func runClaudeUsage() -> ClaudeUsageInfo? {
-        guard let exe = claudePath else { return nil }
+        guard let exe = claudePath else {
+            NSLog("[WakaWaka] claude CLI not found on PATH — server-verified usage unavailable")
+            return nil
+        }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: exe)
@@ -157,12 +160,16 @@ enum ParserRunner {
         process.standardOutput = outPipe
         process.standardError  = errPipe
 
-        do { try process.run() } catch { return nil }
+        do { try process.run() } catch {
+            NSLog("[WakaWaka] claude -p \"/usage\" failed to launch: %@", error.localizedDescription)
+            return nil
+        }
 
+        var stderrData = Data()
         let errGroup = DispatchGroup()
         errGroup.enter()
         DispatchQueue.global(qos: .utility).async {
-            _ = errPipe.fileHandleForReading.readDataToEndOfFile()
+            stderrData = errPipe.fileHandleForReading.readDataToEndOfFile()
             errGroup.leave()
         }
 
@@ -174,8 +181,24 @@ enum ParserRunner {
         timeoutItem.cancel()
         errGroup.wait()
 
-        guard let text = String(data: data, encoding: .utf8), !text.isEmpty else { return nil }
-        return parseUsageOutput(text)
+        let text = String(data: data, encoding: .utf8) ?? ""
+        if let info = parseUsageOutput(text) { return info }
+
+        // Returning nil freezes the Claude bar on the local JSONL estimate until
+        // the next 10-minute poll. Without this line nothing anywhere says why —
+        // the bar just sits at a number the user cannot reconcile with the CLI.
+        NSLog("[WakaWaka] claude -p \"/usage\" gave no session %% (exit %d) — stdout: %@ | stderr: %@",
+              process.terminationStatus,
+              excerpt(text),
+              excerpt(String(data: stderrData, encoding: .utf8) ?? ""))
+        return nil
+    }
+
+    /// Keeps a failure log to one readable line; these outputs run to many lines.
+    private static func excerpt(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "<empty>" }
+        return String(trimmed.prefix(300)).replacingOccurrences(of: "\n", with: " ⏎ ")
     }
 
     private static func parseUsageOutput(_ text: String) -> ClaudeUsageInfo? {
