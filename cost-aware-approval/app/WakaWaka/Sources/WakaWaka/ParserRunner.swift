@@ -6,15 +6,25 @@ enum ParserRunner {
     //   2. Relative to binary: <repo>/cost-aware-approval/app/WakaWaka/.build/<cfg>/WakaWaka
     //      → navigate up 5 levels → <repo>/cost-aware-approval/parser/
     //   3. ~/WakaWaka/cost-aware-approval/parser/ (conventional fallback)
-    private static let parserDir: String = {
+    //
+    // Re-resolved on every call rather than cached in a `static let`: the app
+    // runs for days, and a cached path that goes stale never heals. A few
+    // `fileExists` checks cost nothing next to the `npx tsx` launch they precede.
+    private static var parserDir: String {
+        resolveParserDir(environment: ProcessInfo.processInfo.environment,
+                         binaryPath: CommandLine.arguments[0],
+                         home: FileManager.default.homeDirectoryForCurrentUser.path)
+    }
+
+    static func resolveParserDir(environment: [String: String], binaryPath: String, home: String) -> String {
         let fm = FileManager.default
 
-        if let env = ProcessInfo.processInfo.environment["WAKAWAKA_PARSER_DIR"],
+        if let env = environment["WAKAWAKA_PARSER_DIR"],
            fm.fileExists(atPath: "\(env)/usage-calculator.ts") {
             return env
         }
 
-        let binaryURL = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+        let binaryURL = URL(fileURLWithPath: binaryPath).resolvingSymlinksInPath()
         let candidate = binaryURL
             .deletingLastPathComponent()          // <cfg>/ (debug or release)
             .deletingLastPathComponent()          // .build/
@@ -25,18 +35,17 @@ enum ParserRunner {
             .path
         if fm.fileExists(atPath: "\(candidate)/usage-calculator.ts") { return candidate }
 
-        let home = fm.homeDirectoryForCurrentUser.path
         return "\(home)/WakaWaka/cost-aware-approval/parser"
-    }()
+    }
 
-    private static let calculatorPath = "\(parserDir)/usage-calculator.ts"
+    private static var calculatorPath: String { "\(parserDir)/usage-calculator.ts" }
 
     /// The rate and context-window table lives beside the parser that also
     /// reads it, so both find it by the same three-step search.
-    static var pricingPath: String { "\(parserDir)/pricing.json" }
-    private static let p90Path        = "\(parserDir)/p90-detector.ts"
-    private static let dailyUsagePath = "\(parserDir)/daily-usage.ts"
-    private static let phaseUsagePath = "\(parserDir)/phase-usage.ts"
+    static var pricingPath: String    { "\(parserDir)/pricing.json" }
+    private static var p90Path: String        { "\(parserDir)/p90-detector.ts" }
+    private static var dailyUsagePath: String { "\(parserDir)/daily-usage.ts" }
+    private static var phaseUsagePath: String { "\(parserDir)/phase-usage.ts" }
 
     // MARK: - Public API
 
@@ -131,15 +140,21 @@ enum ParserRunner {
 
     // MARK: - claude -p "/usage"
 
-    /// Resolved path to the `claude` CLI binary, found via the same PATH as the parser.
-    private static let claudePath: String? = {
-        let env = buildEnv()
-        for dir in (env["PATH"] ?? "").split(separator: ":").map(String.init) {
-            let p = "\(dir)/claude"
-            if FileManager.default.isExecutableFile(atPath: p) { return p }
+    /// Path to the `claude` CLI binary, found via the same PATH as the parser.
+    /// Looked up on every call (every ten minutes) so that reinstalling the CLI
+    /// a different way — npm → native, a moved symlink — is picked up without
+    /// restarting an app that may have been running for days.
+    private static var claudePath: String? {
+        findExecutable(named: "claude", searchPath: buildEnv()["PATH"] ?? "")
+    }
+
+    static func findExecutable(named name: String, searchPath: String) -> String? {
+        for dir in searchPath.split(separator: ":").map(String.init) {
+            let path = "\(dir)/\(name)"
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
         }
         return nil
-    }()
+    }
 
     /// Runs `claude -p "/usage"` and parses the output for server-side session % and reset time.
     /// Blocks up to 15 s. Returns nil if the binary is not found or output is unparseable.

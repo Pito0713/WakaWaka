@@ -417,6 +417,16 @@ P90 偵測在以下情況會有大誤差：
 
 ---
 
+### v0.22.2 — 2026-10-12
+
+app 動輒連跑數天，但它找 `claude` CLI 與 parser 的路徑只在啟動時解析一次。
+
+#### Fixed
+
+- **換掉 `claude` CLI 的安裝方式後，Claude 額度條會永久失效**。`ParserRunner.claudePath` 與 `parserDir` 原本是 `static let`，一個 process 只解析一次；CLI 從 npm 換成 native、symlink 搬家，舊路徑就一直指著不存在的檔案，直到手動重啟 app 為止，沒有自癒。兩者改為每次呼叫重新解析，解析順序不變。成本是幾次 `fileExists`：CLI 那條每 10 分鐘一次，parser 那條本來就要接著 launch `npx tsx`，因此不另做快取。解析邏輯抽成 `findExecutable(named:searchPath:)` 與 `resolveParserDir(environment:binaryPath:home:)`，新增 `ParserRunnerResolutionTests` 5 條，每條都在兩次查詢之間改動檔案系統、斷言第二次跟著變——快取的實作會讓它們失敗。
+
+---
+
 ### v0.22.1 — 2026-09-29
 
 Codex 額度條凍結在一個過期數字上，任何 refresh 都清不掉。根因是一條防護把唯一還在更新的 session 擋在外面。
