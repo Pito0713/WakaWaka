@@ -12,8 +12,8 @@ const HOOK = new URL('./pretooluse.mjs', import.meta.url).pathname;
  *
  * These tests used to read and write the real `~/.wakawaka/state`, which made
  * them depend on two things that have nothing to do with the code: whether
- * auto mode happened to be enabled (an auto-allow turns an expected `defer`
- * into `allow`), and whether the WakaWaka app was running to answer the
+ * auto mode happened to be enabled (an auto-allow turns an expected
+ * no-decision into `allow`), and whether the WakaWaka app was running to answer the
  * pending file. They also left `decision_test-*.json` behind in the live state
  * directory, which the running app would then act on.
  *
@@ -96,7 +96,9 @@ async function waitForPending(harness, sid, timeoutMs = 4000) {
   throw new Error(`pending file for ${sid} never appeared`);
 }
 
-test('no decision file and app dead → exit 0 with defer', async () => {
+// No decision at all rather than `defer`, which suspends the call in a
+// background subagent and ends it with no result.
+test('no decision file and app dead → exit 0 with no decision', async () => {
   const harness = createHarness();
   try {
     const { code, stdout } = await runHook(harness, 'timeout-dead', {
@@ -105,7 +107,7 @@ test('no decision file and app dead → exit 0 with defer', async () => {
       APP_CHECK_EVERY_MS: '0',
     });
     assert.equal(code, 0);
-    assert.equal(JSON.parse(stdout).hookSpecificOutput?.permissionDecision, 'defer');
+    assert.equal(stdout, '');
   } finally {
     harness.cleanup();
   }

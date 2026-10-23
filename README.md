@@ -320,10 +320,12 @@ Claude Code 使用相同三層名稱，但 adapter 的最終處置可能與 Code
 | 等級 | `permission_mode: "auto"` 時 | 其他模式 |
 | ---- | ---------------------------- | -------- |
 | **CRITICAL** | 彈窗（紅色 banner），人工決定 | 彈窗（紅色 banner），人工決定 |
-| **HIGH** | `defer`，交給 Claude Code 分類器 | 彈窗，人工決定 |
-| **MEDIUM / 唯讀工具 / allowlist / Auto 模式** | `defer`，交給 Claude Code 分類器；不寫 auto-audit | 照上表放行或彈窗 |
+| **HIGH** | 不回決定，交給 Claude Code 分類器 | 彈窗，人工決定 |
+| **MEDIUM / 唯讀工具 / allowlist / Auto 模式** | 不回決定，交給 Claude Code 分類器；不寫 auto-audit | 照上表放行或彈窗 |
 
-CRITICAL 例外，是因為這一級的指令使用者要親自決定，不交給分類器。代價是 auto mode 下沒人盯著 popover 時，agent 會卡到 9m50s 逾時後被拒絕；WakaWaka 沒在跑時則照原本的退路交還 Claude Code（`defer`），由分類器審。`plan` 在 auto mode 可用時也會經過分類器，但 hook 看不出「可用」與否，因此維持原行為。
+CRITICAL 例外，是因為這一級的指令使用者要親自決定，不交給分類器。代價是 auto mode 下沒人盯著 popover 時，agent 會卡到 9m50s 逾時後被拒絕；WakaWaka 沒在跑時則照原本的退路交還 Claude Code（不回決定），由分類器審。
+
+「交還」一律是 exit 0、stdout 不輸出任何東西，**不是** `permissionDecision: "defer"`。`defer` 在主 session 看起來一樣會落回正常流程，但在背景 subagent 裡會把呼叫掛起等人 resume，subagent 就此結束、不留結果。`plan` 在 auto mode 可用時也會經過分類器，但 hook 看不出「可用」與否，因此維持原行為。
 
 ---
 
@@ -414,6 +416,16 @@ P90 偵測在以下情況會有大誤差：
 ## Changelog
 
 版本格式：`v主版本.功能版本.修補版本`，遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/) 規範。
+
+---
+
+### v0.22.3 — 2026-10-23
+
+Claude Code auto mode 下，背景 subagent 一碰工具就結束。
+
+#### Fixed
+
+- **hook 想「交還 Claude Code」時不再回 `defer`，改為完全不輸出決定**。v0.22.0 起，`permission_mode: "auto"` 時每個非 CRITICAL 呼叫都回 `defer`。主 session 收到 `defer` 會落回 classifier，看不出問題；背景 subagent 收到則把呼叫掛起等 resume，Agent tool 不會 resume，subagent 第一個工具呼叫就結束，沒有 tool_result 也沒有回報——連只跑 `echo` 的測試也一樣，WakaWaka 開不開都一樣。掃本機 transcript：主 session 約 2,000 次 `defer` 全數拿到結果，subagent 16 次全數被掛起（`hook_deferred_tool`）。另外 5 個退路（輸入解析失敗、state 目錄不可用、輪詢失敗、WakaWaka 沒在跑、未知決定值）原本也回 `defer`，同樣會讓 subagent 卡死，一併改掉。
 
 ---
 

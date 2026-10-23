@@ -19,7 +19,6 @@ import * as path from 'path';
 import { spawn } from 'node:child_process';
 
 const HOOK = new URL('./pretooluse.mjs', import.meta.url).pathname;
-const NATIVE_AUTO_REASON = /Claude Code auto mode/;
 
 function createHarness() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pretooluse-native-auto-'));
@@ -68,7 +67,7 @@ function runHook(harness, input) {
       const output = (() => {
         try { return JSON.parse(stdout.trim()).hookSpecificOutput ?? {}; } catch { return {}; }
       })();
-      resolve({ code, stderr: stderr.trim(), decision: output.permissionDecision, reason: output.permissionDecisionReason });
+      resolve({ code, stdout: stdout.trim(), stderr: stderr.trim(), decision: output.permissionDecision, reason: output.permissionDecisionReason });
     });
   });
 }
@@ -107,11 +106,12 @@ const HANDED_BACK = [
 
 for (const [toolName, toolInput, via] of HANDED_BACK) {
   const call = toolInput.command ? `${toolName} "${toolInput.command}"` : toolName;
-  test(`native auto: ${call} (${via}) → defer to Claude Code`, async () => {
+  // No decision at all rather than `defer`: a background subagent suspends a
+  // deferred call and ends with no result.
+  test(`native auto: ${call} (${via}) → no decision, Claude Code reviews`, async () => {
     const r = await runNativeAuto(toolName, toolInput);
     assert.equal(r.code, 0);
-    assert.equal(r.decision, 'defer');
-    assert.match(r.reason ?? '', NATIVE_AUTO_REASON);
+    assert.equal(r.stdout, '', 'no permissionDecision of any kind');
     assert.equal(r.hasPending, false, 'nothing is handed to the popover');
     assert.equal(r.hasAudit, false, 'the auto-approval audit records approvals, and this is not one');
   });

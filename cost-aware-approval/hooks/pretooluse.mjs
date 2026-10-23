@@ -48,7 +48,7 @@ const AGENT_NAME      = 'claude-code';
 const POLL_INTERVAL_MS   = 200;
 // pgrep check interval (expensive; keep infrequent)
 const APP_CHECK_EVERY_MS = parseInt(process.env.APP_CHECK_EVERY_MS ?? '5000',  10);
-// Grace period after WakaWaka first seen dead before we fall back to defer
+// Grace period after WakaWaka first seen dead before we abstain
 const APP_DEAD_GRACE_MS  = parseInt(process.env.APP_DEAD_GRACE_MS  ?? '30000', 10);
 // 8-minute warning: mark hookUrgent=true so WakaWaka auto-opens its popover
 // and shows a red "2 minutes left" banner. Hook keeps waiting.
@@ -190,6 +190,14 @@ function decide(permission, reason) {
   process.stdout.write(JSON.stringify(output) + '\n');
 }
 
+// Exits with no permissionDecision, so Claude Code runs its normal permission
+// flow (prompt, or the classifier in auto mode). Not `defer`: that looks the
+// same in the main session, but in a background subagent it suspends the call
+// for a resume that never comes, and the subagent ends with no result.
+function abstain() {
+  process.exit(0);
+}
+
 // ── Allowlist helpers ─────────────────────────────────────────────────────────
 function loadAllowlist() {
   try { return JSON.parse(fs.readFileSync(ALLOWLIST_PATH, 'utf8')); }
@@ -236,14 +244,13 @@ function loadAutoMode(agent) {
 // and WakaWaka's own auto mode are exactly the broad allow rules Claude Code
 // drops when it enters auto mode — so this hook approves nothing here and hands
 // HIGH over too. CRITICAL is the exception: the user wants to decide those
-// personally, so it returns without deciding and the call takes the normal
-// popover path. Otherwise exits the process whenever the mode is auto.
+// personally, so it returns and the call takes the normal popover path.
+// Otherwise abstains whenever the mode is auto.
 function handleNativeAutoMode(permission_mode, tool_name, tool_input) {
   if (permission_mode !== 'auto') return;
   if (tool_name === 'Bash' && assessBashRisk(tool_input?.command) === 'critical') return;
 
-  decide('defer', 'Claude Code auto mode reviews this call');
-  process.exit(0);
+  abstain();
 }
 
 // Only these tool categories may be auto-approved. MCP tools (mcp__*) and any
@@ -411,9 +418,9 @@ function markUrgent(pendingPath) {
 //   (c) FINAL_TIMEOUT_MS elapsed (app alive)         → { timedOut: true, reason: 'finalTimeout' }
 //
 // At WARN_TIMEOUT_MS (8 min), calls onWarn() which marks the pending file urgent
-// so WakaWaka auto-opens its popover without yet deferring or denying.
+// so WakaWaka auto-opens its popover without yet abstaining or denying.
 //
-// 'appDead'     → defer  (graceful fallback; user can't approve without the app)
+// 'appDead'     → abstain (graceful fallback; user can't approve without the app)
 // 'finalTimeout'→ deny   (security: no approval = not allowed)
 function pollDecision(decisionPath, onWarn) {
   return new Promise((resolve) => {
@@ -451,7 +458,7 @@ function pollDecision(decisionPath, onWarn) {
         else if (!appDeadSince)   { appDeadSince = now;  }
       }
 
-      // (b) app dead grace expired → defer
+      // (b) app dead grace expired → abstain
       if (appDeadSince !== null && now - appDeadSince >= APP_DEAD_GRACE_MS) {
         clearInterval(timer);
         resolve({ timedOut: true, reason: 'appDead' });
@@ -474,8 +481,7 @@ async function main() {
     const raw = await readStdin();
     input = JSON.parse(raw);
   } catch {
-    decide('defer', 'Hook received malformed input');
-    process.exit(0);
+    abstain();
   }
 
   // ── Active-agents heartbeat ───────────────────────────────────────────────
@@ -568,8 +574,7 @@ async function main() {
       { encoding: 'utf8', mode: 0o600 },
     );
   } catch {
-    decide('defer', 'WakaWaka state directory unavailable');
-    process.exit(0);
+    abstain();
   }
 
   // ── Tombstone on unexpected exit ──────────────────────────────────────────
@@ -605,8 +610,7 @@ async function main() {
   try {
     result = await pollDecision(DECISION_PATH, () => markUrgent(PENDING_PATH));
   } catch {
-    decide('defer', 'WakaWaka poll failed');
-    process.exit(0);
+    abstain();
   }
 
   if (result.timedOut) {
@@ -614,8 +618,7 @@ async function main() {
 
     if (result.reason === 'appDead') {
       // WakaWaka was not running — fall back gracefully so Claude Code can continue.
-      decide('defer', 'WakaWaka not running — falling back to native approval');
-      process.exit(0);
+      abstain();
     }
 
     // finalTimeout: no human approval in 9m50s → enforce deny.
@@ -658,8 +661,7 @@ async function main() {
     process.exit(0);
   }
 
-  decide('defer', `Unknown decision value: ${decision}`);
-  process.exit(0);
+  abstain();
 }
 
 main();
