@@ -11,8 +11,8 @@ import Foundation
 /// file identical to a live idle one. Only entries quiet for
 /// `livenessGracePeriod` are checked, which skips the syscalls entirely for the
 /// sessions that are actually busy. A long-idle entry is re-checked every poll;
-/// that is two syscalls per row per second, bounded by `maxRows`, and an entry
-/// that fails is deleted rather than re-checked.
+/// that is two syscalls per row per second, and an entry that fails is deleted
+/// rather than re-checked.
 enum AgentRegistryService {
     static let supportedSchema = 1
 
@@ -23,7 +23,9 @@ enum AgentRegistryService {
     /// machine that slept through a crash does not accumulate dead rows.
     static let staleThreshold: TimeInterval = 30 * 60
 
-    static let maxRows = 5
+    /// Tallest the agent list grows before it scrolls (~8 rows). Every row is
+    /// shown; this only keeps a long roster from pushing the window off screen.
+    static let maxListHeight: CGFloat = 320
 
     /// Builds the snapshot from an already-enumerated directory listing.
     ///

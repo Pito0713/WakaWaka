@@ -134,6 +134,19 @@ struct PopoverLayoutTests {
         #expect(hundred == twenty, "growth stops at the ScrollView's cap")
     }
 
+    /// Agents past the fifth used to collapse into a "+N more" line the user
+    /// could neither read nor click. Each one now gets a row, until the list
+    /// reaches its cap and scrolls.
+    @Test func everyAgentGetsARowUntilTheListScrolls() throws {
+        let five = try popoverHeight(model(agents: 5))
+        let six = try popoverHeight(model(agents: 6))
+        let fifty = try popoverHeight(model(agents: 50))
+        let hundred = try popoverHeight(model(agents: 100))
+
+        #expect(six > five, "the sixth agent must add a row")
+        #expect(hundred == fifty, "growth stops at the ScrollView's cap")
+    }
+
     /// What the popover is actually set to — the number that was wrong on
     /// screen. Measuring the view proves nothing about what is done with it.
     @Test func thePopoverIsResizedToWhatTheViewNeeds() throws {

@@ -54,14 +54,19 @@ struct ActiveAgentsView: View {
             Divider()
             VStack(alignment: .leading, spacing: 0) {
                 header
-                ForEach(snapshot.rows.prefix(AgentRegistryService.maxRows)) { row in
-                    AgentRow(row: row,
-                             contextUsage: contextUsage[row.id],
-                             onFocus: { onFocus(row) })
+                // Every row is listed — a "+N more" line named agents the user
+                // could not see or click. Past the cap the list scrolls, so a
+                // long roster cannot push the popover off the screen.
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(snapshot.rows) { row in
+                            AgentRow(row: row,
+                                     contextUsage: contextUsage[row.id],
+                                     onFocus: { onFocus(row) })
+                        }
+                    }
                 }
-                if snapshot.rows.count > AgentRegistryService.maxRows {
-                    overflowNote(snapshot.rows.count - AgentRegistryService.maxRows)
-                }
+                .frame(maxHeight: AgentRegistryService.maxListHeight)
                 if let message = snapshot.status.message {
                     statusNote(message)
                 }
@@ -143,14 +148,6 @@ struct ActiveAgentsView: View {
         .disabled(isRefreshing)
         .help("重新檢查所有 agent 是否還活著")
         .accessibilityLabel("重新檢查所有 agent 是否還活著")
-    }
-
-    private func overflowNote(_ count: Int) -> some View {
-        Text("+\(count) more")
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-            .padding(.horizontal, 14)
-            .padding(.top, 2)
     }
 
     /// Never silent: the user is told why the panel is not showing what they expect.

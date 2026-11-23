@@ -57,18 +57,15 @@ struct FloatingAgentsView: View {
     private var agentList: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            ForEach(model.snapshot.rows.prefix(AgentRegistryService.maxRows)) { row in
-                FloatingAgentRow(row: row,
-                                 contextUsage: model.contextUsage[row.id]) { onFocus(row) }
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(model.snapshot.rows) { row in
+                        FloatingAgentRow(row: row,
+                                         contextUsage: model.contextUsage[row.id]) { onFocus(row) }
+                    }
+                }
             }
-            if model.snapshot.rows.count > AgentRegistryService.maxRows {
-                Text("另有 \(model.snapshot.rows.count - AgentRegistryService.maxRows) 個")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 10)
-                    .padding(.top, 2)
-                    .padding(.bottom, 5)
-            }
+            .frame(maxHeight: AgentRegistryService.maxListHeight)
             if let statusMessage = model.snapshot.status.message {
                 statusNote(statusMessage)
             }
