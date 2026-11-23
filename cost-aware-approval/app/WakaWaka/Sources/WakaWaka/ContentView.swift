@@ -83,7 +83,7 @@ struct ContentView: View {
 
     private var idleView: some View {
         VStack(spacing: 10) {
-            PacManIdleView()
+            PacManIdleView(isAnimating: model.isPopoverShown)
             Text("No pending approval").foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
@@ -563,6 +563,7 @@ private struct QueueItemRow: View {
 /// of `frame` so the loop stays deterministic; motion is frozen when the system
 /// "Reduce Motion" accessibility setting is on.
 private struct PacManIdleView: View {
+    let isAnimating: Bool
     @State private var frame = 0
     private let timer = Timer.publish(every: 0.14, on: .main, in: .common).autoconnect()
 
@@ -746,7 +747,8 @@ private struct PacManIdleView: View {
         }
         .frame(width: canvasW, height: canvasH)
         .onReceive(timer) { _ in
-            guard !reduceMotion else { return }
+            // Skipping the state change is what stops the redraw; the tick itself is free.
+            guard isAnimating, !reduceMotion else { return }
             frame &+= 1
         }
     }

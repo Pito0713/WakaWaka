@@ -127,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         popover = NSPopover()
         popover.behavior = .applicationDefined
+        popover.delegate = self
 
         let hc = NSHostingController(rootView: ContentView(model: viewModel))
         // Disable automatic sizing so our contentSize is respected
@@ -1143,5 +1144,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         refreshViewModel()
+    }
+}
+
+// MARK: - Popover visibility
+
+extension AppDelegate: NSPopoverDelegate {
+    func popoverWillShow(_ notification: Notification) {
+        viewModel.isPopoverShown = true
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        viewModel.isPopoverShown = false
     }
 }

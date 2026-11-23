@@ -38,6 +38,9 @@ final class PopoverViewModel: ObservableObject {
     @Published var agentFocusError: String? = nil
     /// Mirrors the persisted flag so the footer never guesses controller state.
     @Published var isFloatingPanelVisible: Bool = false
+    /// The hosting view outlives a closed popover, so anything that animates on a
+    /// timer must check this — otherwise it re-lays-out an off-screen window forever.
+    @Published var isPopoverShown: Bool = false
 
     /// Per-agent "auto mode" toggle state, mirrored from ~/.wakawaka/settings.json.
     /// AppDelegate owns the SettingsService round-trip (including the 30-min
