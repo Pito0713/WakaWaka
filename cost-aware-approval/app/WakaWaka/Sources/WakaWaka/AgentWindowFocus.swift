@@ -282,13 +282,20 @@ enum AgentWindowFocus {
     }
 
     private static func terminalTabListing() -> String? {
+        // `count of windows` also counts windows that have no scripting object
+        // behind them (a ghost entry Terminal keeps after some panels close).
+        // Asking one of those for its id raises -1728/-10000, which would fail
+        // the whole listing and look like a missing Automation grant. Skip them.
         let query = """
         tell application "Terminal"
           set out to ""
           repeat with w from 1 to count of windows
-            repeat with t from 1 to count of tabs of window w
-              set out to out & (id of window w) & " " & t & " " & (tty of tab t of window w) & linefeed
-            end repeat
+            try
+              set windowID to id of window w
+              repeat with t from 1 to count of tabs of window w
+                set out to out & windowID & " " & t & " " & (tty of tab t of window w) & linefeed
+              end repeat
+            end try
           end repeat
           return out
         end tell
