@@ -18,6 +18,16 @@ struct PopoverFooter: View {
     @AppStorage("manualPlanLimit")           private var manualLimit:   Int = 0
 
     @State private var isRefreshing = false
+    @State private var refreshStartedAt = Date()
+
+    /// One full turn of the refresh icon.
+    static let spinTurnDuration: TimeInterval = 0.7
+
+    /// Icon angle `elapsed` seconds into a refresh: a steady clockwise spin.
+    static func spinDegrees(elapsed: TimeInterval) -> Double {
+        guard elapsed > 0 else { return 0 }
+        return (elapsed / spinTurnDuration).truncatingRemainder(dividingBy: 1) * 360
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -103,20 +113,25 @@ struct PopoverFooter: View {
     private var refreshButton: some View {
         Button {
             guard !isRefreshing else { return }
+            refreshStartedAt = Date()
             isRefreshing = true
             model.onRefreshSession()
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                 isRefreshing = false
             }
         } label: {
-            Image(systemName: isRefreshing ? "arrow.trianglehead.2.clockwise.rotate.90" : "arrow.clockwise")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .rotationEffect(isRefreshing ? .degrees(360) : .zero)
-                .animation(
-                    isRefreshing ? .linear(duration: 0.7).repeatForever(autoreverses: false) : .default,
-                    value: isRefreshing
-                )
+            // Not `.animation(.repeatForever)`: flipping `isRefreshing` back did
+            // not cancel it, and the hidden popover kept rendering frames at
+            // ~20% CPU until the app was restarted. A paused TimelineView
+            // schedules no frames at all, so stopping cannot leak.
+            TimelineView(.animation(paused: !isRefreshing)) { context in
+                Image(systemName: isRefreshing ? "arrow.trianglehead.2.clockwise.rotate.90" : "arrow.clockwise")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isRefreshing
+                        ? Self.spinDegrees(elapsed: context.date.timeIntervalSince(refreshStartedAt))
+                        : 0))
+            }
         }
         .buttonStyle(.plain)
         .help("立即重新抓取 Claude 與 Codex usage")
