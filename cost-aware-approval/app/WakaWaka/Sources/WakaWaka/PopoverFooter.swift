@@ -9,8 +9,7 @@ import SwiftUI
 ///   Row 3  — Codex quota bar (primary window only; see the dashboard for the rest)
 ///
 /// This view mutates only local UI mirrors before forwarding user intent through
-/// callbacks. Progress-bar styling mirrors SessionStatusView (which stays the
-/// source of the detailed dashboard) but is duplicated to keep the footer minimal.
+/// callbacks.
 struct PopoverFooter: View {
     @ObservedObject var model: PopoverViewModel
 
@@ -20,14 +19,8 @@ struct PopoverFooter: View {
     @State private var isRefreshing = false
     @State private var refreshStartedAt = Date()
 
-    /// One full turn of the refresh icon.
-    static let spinTurnDuration: TimeInterval = 0.7
-
-    /// Icon angle `elapsed` seconds into a refresh: a steady clockwise spin.
-    static func spinDegrees(elapsed: TimeInterval) -> Double {
-        guard elapsed > 0 else { return 0 }
-        return (elapsed / spinTurnDuration).truncatingRemainder(dividingBy: 1) * 360
-    }
+    /// One full turn of the footer's refresh icon.
+    private static let spinTurnDuration: TimeInterval = 0.7
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -120,16 +113,14 @@ struct PopoverFooter: View {
                 isRefreshing = false
             }
         } label: {
-            // Not `.animation(.repeatForever)`: flipping `isRefreshing` back did
-            // not cancel it, and the hidden popover kept rendering frames at
-            // ~20% CPU until the app was restarted. A paused TimelineView
-            // schedules no frames at all, so stopping cannot leak.
+            // Paused TimelineView, not repeatForever — see RefreshSpin.degrees.
             TimelineView(.animation(paused: !isRefreshing)) { context in
                 Image(systemName: isRefreshing ? "arrow.trianglehead.2.clockwise.rotate.90" : "arrow.clockwise")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isRefreshing
-                        ? Self.spinDegrees(elapsed: context.date.timeIntervalSince(refreshStartedAt))
+                        ? RefreshSpin.degrees(elapsed: context.date.timeIntervalSince(refreshStartedAt),
+                                              turnDuration: Self.spinTurnDuration)
                         : 0))
             }
         }

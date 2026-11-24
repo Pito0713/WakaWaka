@@ -21,20 +21,20 @@ import Foundation
     }
 }
 
-/// The footer spin is computed from elapsed time rather than animated, so it
-/// can be paused outright; these pin the angle it draws.
-@Suite struct FooterRefreshSpinTests {
+/// Spinners draw this angle inside a paused-when-idle TimelineView, so it
+/// must be a pure function of elapsed time.
+@Suite struct RefreshSpinAngleTests {
     @Test func startsUpright() {
-        #expect(PopoverFooter.spinDegrees(elapsed: 0) == 0)
+        #expect(RefreshSpin.degrees(elapsed: 0) == 0)
     }
 
     @Test func turnsHalfwayInHalfATurn() {
-        let degrees = PopoverFooter.spinDegrees(elapsed: PopoverFooter.spinTurnDuration / 2)
+        let degrees = RefreshSpin.degrees(elapsed: RefreshSpin.turnDuration / 2)
         #expect(abs(degrees - 180) < 0.001)
     }
 
     @Test func wrapsInsteadOfGrowingWithoutBound() {
-        let degrees = PopoverFooter.spinDegrees(elapsed: PopoverFooter.spinTurnDuration * 10.25)
+        let degrees = RefreshSpin.degrees(elapsed: 0.7 * 10.25, turnDuration: 0.7)
         #expect(abs(degrees - 90) < 0.001)
     }
 }

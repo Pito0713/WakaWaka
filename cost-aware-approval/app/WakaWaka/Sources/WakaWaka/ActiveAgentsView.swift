@@ -17,6 +17,17 @@ enum RefreshSpin {
     static func remaining(after elapsed: TimeInterval) -> TimeInterval {
         max(0, turnDuration - elapsed)
     }
+
+    /// Icon angle `elapsed` seconds into a spin: a steady clockwise turn.
+    ///
+    /// Spinners draw this inside a `TimelineView` paused while idle, never
+    /// with `.animation(.repeatForever)`: lowering the flag did not cancel a
+    /// repeatForever rotation, and the closed popover kept rendering at
+    /// ~20% CPU until restart. A paused timeline schedules no frames at all.
+    static func degrees(elapsed: TimeInterval, turnDuration: TimeInterval = turnDuration) -> Double {
+        guard elapsed > 0, turnDuration > 0 else { return 0 }
+        return (elapsed / turnDuration).truncatingRemainder(dividingBy: 1) * 360
+    }
 }
 
 /// The ACTIVE AGENTS panel, pinned to the bottom of the popover.
@@ -46,6 +57,8 @@ struct ActiveAgentsView: View {
     /// Why the last click did not reach a window. Shown rather than swallowed:
     /// a click that silently does nothing reads as a broken panel.
     var focusError: String? = nil
+
+    @State private var spinStartedAt = Date()
 
     var body: some View {
         if !snapshot.isEmpty {
@@ -122,30 +135,25 @@ struct ActiveAgentsView: View {
             guard !isRefreshing else { return }
             onRefresh()
         } label: {
-            Image(systemName: "arrow.clockwise")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(isRefreshing ? 360 : 0))
-                // The spin is tied to the work, not to a duration guessed here:
-                // a forced refresh verifies every process, so it can outlast
-                // any fixed animation — and a button that is disabled and
-                // motionless reads as a hung panel, which is the opposite of
-                // what this button is for.
-                //
-                // The angle is driven by `isRefreshing` itself, so stopping is
-                // a value change SwiftUI can see. Animating a separate rotation
-                // accumulator did not stop: the wind-down assigned the turn the
-                // accumulator had already reached, and a state change to the
-                // value it already holds starts no transaction — so nothing
-                // ever replaced the repeatForever animation and the icon spun
-                // on for the life of the popover.
-                .animation(isRefreshing
-                           ? .linear(duration: RefreshSpin.turnDuration).repeatForever(autoreverses: false)
-                           : .linear(duration: 0.2),
-                           value: isRefreshing)
+            // The spin is tied to the work, not to a duration guessed here:
+            // a forced refresh verifies every process, so it can outlast any
+            // fixed animation — and a button that is disabled and motionless
+            // reads as a hung panel. See RefreshSpin.degrees for why this is
+            // a paused TimelineView rather than a repeatForever animation.
+            TimelineView(.animation(paused: !isRefreshing)) { context in
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isRefreshing
+                        ? RefreshSpin.degrees(elapsed: context.date.timeIntervalSince(spinStartedAt))
+                        : 0))
+            }
         }
         .buttonStyle(.plain)
         .disabled(isRefreshing)
+        .onChange(of: isRefreshing) { _, started in
+            if started { spinStartedAt = Date() }
+        }
         .help("重新檢查所有 agent 是否還活著")
         .accessibilityLabel("重新檢查所有 agent 是否還活著")
     }
