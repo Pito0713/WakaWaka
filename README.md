@@ -123,7 +123,6 @@ cost-aware-approval/
         ├── FloatingPanelLayout.swift    # HUD 版面常數與 clamp 規則
         ├── FloatingPanelPreferences.swift # HUD 可見狀態與透明度偏好
         ├── PopoverSizing.swift     # popover 高度：向 SwiftUI 量測，不用常數加總
-        ├── SessionStatusView.swift # 5h 用量進度條 + 重置倒數 + server 驗證綠點
         ├── PopoverViewModel.swift  # UI 狀態管理（含 claudeUsageInfo、agyQuota）
         ├── AgyQuotaService.swift   # agy local language server quota 查詢（port 探測 + HTTP）
         ├── CodexUsageService.swift # Codex 5h / weekly 本機用量彙整
