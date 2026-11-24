@@ -98,17 +98,28 @@ cost-aware-approval/
 │   ├── stop.mjs                # 回合結束 → idle
 │   └── sessionend.mjs          # session 結束 → 刪除 registry 檔
 ├── parser/
-│   ├── usage-calculator.ts     # Token 用量計算（兩遍掃描 + global dedup）
+│   ├── usage-calculator.ts     # app 呼叫的 CLI 入口（單檔 / --aggregate），並 re-export 下列模組
+│   ├── usage-rows.ts           # 單列 usage 擷取、per-model bucket 與計價
+│   ├── transcript-usage.ts     # 單一 transcript：兩遍掃描 + dedup → cumulative / 5h / turn
+│   ├── aggregate-usage.ts      # 所有近 6h transcript 合併成單一時間軸 → 5h 窗口
+│   ├── daily-usage.ts          # dashboard 每日用量彙整（CLI）；daily-scan.ts 負責逐檔掃描
+│   ├── bash-classify.ts        # Bash 指令 → 活動階段；規則表在 bash-rules.ts
 │   ├── p90-detector.ts         # 歷史 peak 分析 → 方案上限自動估算
 │   └── pricing.json            # 定價與 context window 表（手動維護，OpenAI 側為等值 API 估算）
 └── app/WakaWaka/
     └── Sources/WakaWaka/
-        ├── AppDelegate.swift       # 主控：1s 輪詢 + 60s session 刷新 + 10m /usage 校正
-        ├── ContentView.swift       # 待審批佇列 UI（agent badge、展開全文）
+        ├── AppDelegate.swift       # 主控：狀態與啟動；其餘分在 extension 檔
+        ├── AppDelegate+StatusIcon.swift # 選單列 ghost 圖示與動畫
+        ├── AppDelegate+Refresh.swift    # 週期刷新：60s parser、10m /usage、Codex/agy 額度、P90
+        ├── AppDelegate+Queue.swift      # 1s 審批佇列輪詢、用量通知、per-session usage 快取
+        ├── AppDelegate+Popover.swift    # popover、ACTIVE AGENTS / HUD、審批決定寫回
+        ├── ContentView.swift       # popover 根 view
+        ├── QueueItemRow.swift      # 待審批單列（agent badge、倒數）；展開內容在 QueueItemRow+Detail.swift
+        ├── PacManIdleView.swift    # 閒置動畫（popover 關閉時不推進）
         ├── AgentRegistry.swift     # registry 檔案格式、顯示模型、pid 存活判定
         ├── AgentRegistryService.swift # registry 讀取、pid 驗證、崩潰殘留清理
         ├── ActiveAgentsView.swift  # ACTIVE AGENTS 面板（popover 底部、控制列之下）
-        ├── AgentWindowFocus.swift  # 點擊列 → 跳到該 agent 的終端機（tmux 原 session / Terminal.app）
+        ├── AgentWindowFocus.swift  # 點擊列 → 跳到該 agent 的終端機；+Tmux / +Terminal 分別處理兩種終端
         ├── ContextMeter.swift       # 上下文佔用 meter：顏色帶由畫面上的百分比決定，不由原始分數
         ├── ContextUsageService.swift # 5s 背景時鐘讀 transcript 尾端，size/mtime 沒變不重讀
         ├── ContextWindows.swift     # 模型 → context window 查表（pricing.json），查不到就不畫 meter
@@ -127,8 +138,10 @@ cost-aware-approval/
         ├── AgyQuotaService.swift   # agy local language server quota 查詢（port 探測 + HTTP）
         ├── CodexUsageService.swift # Codex 5h / weekly 本機用量彙整
         ├── SettingsService.swift   # per-agent Auto Mode 設定與期限
-        ├── ParserRunner.swift      # parser bridge（`node --import tsx`，未安裝時退回 npx）+ claude /usage 呼叫
-        └── Models.swift            # PendingData、UsageOutput、ClaudeUsageInfo、P90Result
+        ├── ParserRunner.swift      # parser bridge（`node --import tsx`，未安裝時退回 npx）；+ClaudeUsage 呼叫 claude /usage
+        ├── UsageDashboardWindow.swift # 用量 dashboard 視窗；+Quota / +Charts 為兩個區塊
+        ├── PendingData.swift       # pending_<sid>.json 解碼；+Rendering 產生摘要與 diff 區塊
+        └── Models.swift            # UsageOutput、ClaudeUsageInfo、P90Result、Codex 額度
 
 ~/.claude/settings.json             # Claude Code hook 配置（PreToolUse + 4 個 lifecycle）
 .codex/hooks.json                   # Codex 專案 hook 配置（指向 pretooluse-codex.mjs）
