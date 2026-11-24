@@ -90,11 +90,27 @@ enum ParserRunner {
 
     // MARK: - Shared process runner
 
-    /// Runs `npx tsx <scriptPath> [extraArgs]` and returns stdout Data, or nil on error/timeout.
+    /// The command that runs a parser script, before the script's own arguments.
+    ///
+    /// With the parser's pinned `tsx` installed (`npm ci` in parser/), node
+    /// loads it directly. `npx` is the fallback only: resolving the package
+    /// costs ~0.4s per launch, which was ~70% of every 60-second refresh.
+    static func scriptCommand(parserDir: String, scriptPath: String) -> [String] {
+        let localTsx = "\(parserDir)/node_modules/tsx/package.json"
+        if FileManager.default.fileExists(atPath: localTsx) {
+            return ["node", "--import", "tsx", scriptPath]
+        }
+        return ["npx", "--yes", "tsx", scriptPath]
+    }
+
+    /// Runs a parser script (see `scriptCommand`) and returns stdout Data, or nil on error/timeout.
     private static func runScript(scriptPath: String, extraArgs: [String], timeout: TimeInterval) -> Data? {
+        let dir = parserDir
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["npx", "--yes", "tsx", scriptPath] + extraArgs
+        process.arguments = scriptCommand(parserDir: dir, scriptPath: scriptPath) + extraArgs
+        // `--import tsx` is a bare specifier, resolved from the working directory.
+        process.currentDirectoryURL = URL(fileURLWithPath: dir)
         process.environment = buildEnv()
 
         let stdoutPipe = Pipe()

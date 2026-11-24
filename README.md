@@ -127,7 +127,7 @@ cost-aware-approval/
         ├── AgyQuotaService.swift   # agy local language server quota 查詢（port 探測 + HTTP）
         ├── CodexUsageService.swift # Codex 5h / weekly 本機用量彙整
         ├── SettingsService.swift   # per-agent Auto Mode 設定與期限
-        ├── ParserRunner.swift      # npx tsx bridge + claude /usage 呼叫
+        ├── ParserRunner.swift      # parser bridge（`node --import tsx`，未安裝時退回 npx）+ claude /usage 呼叫
         └── Models.swift            # PendingData、UsageOutput、ClaudeUsageInfo、P90Result
 
 ~/.claude/settings.json             # Claude Code hook 配置（PreToolUse + 4 個 lifecycle）
@@ -179,7 +179,7 @@ sessionReset    = sessionStartISO + 5h（隨 sliding window 緩慢往後推移�
 | 技術                          | 版本   | 用途                                    |
 | ----------------------------- | ------ | --------------------------------------- |
 | **TypeScript**                | 5.x    | 型別安全的 JSONL 解析器                 |
-| **tsx**                       | v4.22+ | 零設定直接執行 `.ts`（無需 `tsc` 編譯） |
+| **tsx**                       | 4.23.15（pinned） | 零設定直接執行 `.ts`（無需 `tsc` 編譯）；`parser/package.json` 鎖版本，`start.sh` 以 `npm ci` 安裝 |
 | Node.js `readline`            | —      | 串流逐行讀取大型 JSONL                  |
 | Node.js `fs.createReadStream` | —      | 非阻塞檔案讀取                          |
 | `Promise.all`                 | —      | 多檔案平行讀取                          |
@@ -193,7 +193,7 @@ sessionReset    = sessionStartISO + 5h（隨 sliding window 緩慢往後推移�
 | **AppKit** (`NSStatusBar`) | —         | menubar status item               |
 | **UserNotifications**      | —         | 80% / 95% 用量警告推播            |
 | **Swift Package Manager**  | —         | 無第三方依賴，純原生 build        |
-| `Process` + `Pipe`         | —         | 從 Swift 呼叫 `npx tsx`（bridge） |
+| `Process` + `Pipe`         | —         | 從 Swift 呼叫 `node --import tsx`（bridge） |
 | `DispatchQueue`            | —         | 背景 I/O + serial log queue       |
 | `UserDefaults`             | —         | 持久化方案上限、手動校準值        |
 
@@ -244,7 +244,7 @@ cd WakaWaka
 cd cost-aware-approval/app/WakaWaka && swift test
 
 # TypeScript parser
-cd cost-aware-approval/parser && npx tsx --test *.test.ts
+cd cost-aware-approval/parser && npm ci && npm test
 
 # Node hooks
 node --test cost-aware-approval/hooks/*.test.mjs

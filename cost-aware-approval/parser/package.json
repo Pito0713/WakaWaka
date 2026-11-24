@@ -1,0 +1,12 @@
+{
+  "name": "wakawaka-parser",
+  "private": true,
+  "type": "module",
+  "description": "Transcript usage parsers run by the WakaWaka menubar app.",
+  "scripts": {
+    "test": "tsx --test *.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "4.23.15"
+  }
+}

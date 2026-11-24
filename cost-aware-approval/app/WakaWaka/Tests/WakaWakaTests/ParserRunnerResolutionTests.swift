@@ -92,4 +92,20 @@ struct ParserRunnerResolutionTests {
         #expect(ParserRunner.resolveParserDir(environment: [:], binaryPath: binaryPath, home: root.path)
                 == parser.path)
     }
+
+    @Test func usesTheLocalTsxOnceItIsInstalledAndNpxBefore() throws {
+        let parserDir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: parserDir) }
+        let script = parserDir.appendingPathComponent("usage-calculator.ts").path
+
+        #expect(ParserRunner.scriptCommand(parserDir: parserDir.path, scriptPath: script)
+                == ["npx", "--yes", "tsx", script])
+
+        let tsxDir = parserDir.appendingPathComponent("node_modules/tsx")
+        try FileManager.default.createDirectory(at: tsxDir, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: tsxDir.appendingPathComponent("package.json").path,
+                                       contents: Data("{}".utf8))
+        #expect(ParserRunner.scriptCommand(parserDir: parserDir.path, scriptPath: script)
+                == ["node", "--import", "tsx", script])
+    }
 }

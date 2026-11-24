@@ -65,6 +65,20 @@ else
   ok "Binary 已是最新（原始碼自上次 build 後未變更）"
 fi
 
+# ── Step 1.5: parser 依賴（tsx）──────────────────────────────
+# ParserRunner 偵測到 parser/node_modules/tsx 就直接 `node --import tsx`，
+# 否則退回 `npx --yes tsx`——每次多花約 0.4 秒解析套件，而 parser 每 60 秒跑一次。
+# 用 npm ci 照 package-lock.json 裝固定版本，不會順手升級。裝失敗不擋啟動：
+# app 仍可走 npx 那條慢路徑。
+PARSER_DIR="$REPO/cost-aware-approval/parser"
+if [[ -f "$PARSER_DIR/node_modules/tsx/package.json" ]]; then
+  ok "parser 依賴已安裝（略過）"
+elif (cd "$PARSER_DIR" && npm ci --no-audit --no-fund >/dev/null 2>&1); then
+  ok "parser 依賴已安裝（npm ci）"
+else
+  warn "parser 依賴安裝失敗，parser 會改走 npx（較慢）"
+fi
+
 # ── Step 2: 還原 menubar skin ────────────────────────────────
 # SkinManager 只在啟動時掃描 ~/.wakawaka/skins，所以這步必須排在重啟之前，
 # 首次安裝才能在同一次執行就載入到圖。以 idle_0.png 當基準幀判斷是否已安裝
